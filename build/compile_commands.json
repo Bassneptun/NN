@@ -1,0 +1,8 @@
+[
+{
+  "directory": "/home/bassneptun/NNs/build",
+  "command": "/usr/bin/c++   -std=gnu++17 -o CMakeFiles/main.dir/classical.cpp.o -c /home/bassneptun/NNs/classical.cpp",
+  "file": "/home/bassneptun/NNs/classical.cpp",
+  "output": "CMakeFiles/main.dir/classical.cpp.o"
+}
+]

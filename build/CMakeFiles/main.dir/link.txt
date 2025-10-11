@@ -1,1 +1,0 @@
-/usr/bin/c++ -rdynamic CMakeFiles/main.dir/classical.cpp.o -o main  -larmadillo 

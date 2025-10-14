@@ -1,3 +1,0 @@
-/home/bassneptun/NN/build/CMakeFiles/main.dir
-/home/bassneptun/NN/build/CMakeFiles/edit_cache.dir
-/home/bassneptun/NN/build/CMakeFiles/rebuild_cache.dir

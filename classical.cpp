@@ -28,7 +28,7 @@ using batch = std::vector<arma::vec>;
 
 double mse(batch a, batch b) {
   double out;
-  std::cout <<  "1" << std::endl;
+  std::cout << "1" << std::endl;
   for (int i = 0; i < a.size(); i++) {
     a[i].print();
     b[i].print();
@@ -43,19 +43,6 @@ struct NN {
   std::vector<arma::vec> biases;
 };
 
-NN seperate(tensor a) {
-  tensor weights_;
-  std::vector<arma::vec> biases;
-  for (int i = 0; i < a.size(); i++) {
-    arma::vec tmp;
-    tmp = a[i].col(a[i].n_cols - 1);
-    biases.push_back(tmp);
-    a[i].shed_col(a[i].n_cols - 1);
-    weights_.push_back(a[i]);
-  }
-  return NN{weights_, biases};
-}
-
 class Chromosome {
 public:
   std::vector<int> size;
@@ -65,29 +52,20 @@ public:
 
 std::vector<std::function<void(Chromosome &)>> mutations;
 
-std::vector<double> temperatures(int high, int low, int num) {
-  std::vector<double> out;
-  for (int i = high; i > low; i -= (high - low) / num) {
-    out.push_back(i);
-  }
-  return out;
-}
-
 std::vector<Chromosome> gen(std::vector<int> sizes, int size) {
-  for(auto a: sizes){
+  for (auto a : sizes) {
     std::cout << a << ", ";
   }
   std::cout << size << std::endl;
   std::vector<Chromosome> out;
   for (int i = 0; i < size; i++) {
-    tensor tmp;
+    tensor weights;
+    std::vector<arma::vec> biases;
     for (int j = 1; j < sizes.size(); j++) {
-      arma::mat new_mat =
-          arma::mat(sizes[j - 1] + 1, sizes[j], arma::fill::randu);
-      tmp.push_back(new_mat);
+      weights.push_back(arma::mat(sizes[j], sizes[j - 1], arma::fill::randu));
+      biases.push_back(arma::vec(sizes[j], arma::fill::randu));
     }
-    out.push_back(
-        Chromosome{sizes, seperate(tmp).weights, seperate(tmp).biases});
+    out.push_back(Chromosome{sizes, weights, biases});
   }
   return out;
 }
@@ -100,21 +78,18 @@ std::vector<int> extract_size(tensor x) {
   return out;
 }
 
-Chromosome to_chromosome(tensor arr) {
-  auto a = seperate(arr);
-  return Chromosome{extract_size(arr), a.weights, a.biases};
-}
-
 Chromosome mv(std::vector<int> size, tensor weights,
               std::vector<arma::vec> biases) {
   return Chromosome{std::move(size), std::move(weights), std::move(biases)};
 }
 
-bool r_choice() { return ((double)std::rand()/(double)RAND_MAX) > .5; }
-bool r_choice(double chance) {return ((double)std::rand()/(double)RAND_MAX) < chance;}
+bool r_choice() { return ((double)std::rand() / (double)RAND_MAX) > .5; }
+bool r_choice(double chance) {
+  return ((double)std::rand() / (double)RAND_MAX) < chance;
+}
 
 template <typename T> T r_choice(std::vector<T> a) {
-  return a[((double)std::rand()/(double)RAND_MAX) * a.size()];
+  return a[((double)std::rand() / (double)RAND_MAX) * a.size()];
 }
 
 // Option 1
@@ -129,23 +104,29 @@ void mutate(Chromosome &ch, double chance, bool double_mut) {
       r_choice(mutations)(ch);
     else
       return;
-  } while(double_mut);
+  } while (double_mut);
 }
 
 void random_change_weighted(Chromosome &ch) {
   if (r_choice()) {
-    int layer = std::floor(((double)std::rand()/(double)RAND_MAX) * ch.weights.size());
-    std::pair<int, int> pos = std::make_pair(((double)std::rand()/(double)RAND_MAX) * ch.weights[layer].n_rows,
-                                             ((double)std::rand()/(double)RAND_MAX) * ch.weights[layer].n_cols);
-    int n = floor(((double)std::rand()/(double)RAND_MAX) * 65); // bitte sei nicht 65...
+    int layer = std::floor(((double)std::rand() / (double)RAND_MAX) *
+                           ch.weights.size());
+    std::pair<int, int> pos = std::make_pair(
+        ((double)std::rand() / (double)RAND_MAX) * ch.weights[layer].n_rows,
+        ((double)std::rand() / (double)RAND_MAX) * ch.weights[layer].n_cols);
+    int n = floor(((double)std::rand() / (double)RAND_MAX) *
+                  65); // bitte sei nicht 65...
     ch.weights[layer](pos.first, pos.second) =
         std::bit_cast<double>(std::bit_cast<unsigned long long>(
                                   ch.weights[layer](pos.first, pos.second)) ^
                               (1ULL << n));
   } else {
-    int layer = std::floor(((double)std::rand()/(double)RAND_MAX) * ch.weights.size());
-    int pos = ((double)std::rand()/(double)RAND_MAX) * ch.biases[layer].n_elem;
-    int n = floor(((double)std::rand()/(double)RAND_MAX) * 65); // bitte sei nicht 65...
+    int layer = std::floor(((double)std::rand() / (double)RAND_MAX) *
+                           ch.weights.size());
+    int pos =
+        ((double)std::rand() / (double)RAND_MAX) * ch.biases[layer].n_elem;
+    int n = floor(((double)std::rand() / (double)RAND_MAX) *
+                  65); // bitte sei nicht 65...
     ch.weights[layer](pos) = std::bit_cast<double>(
         std::bit_cast<unsigned long long>(ch.weights[layer](pos)) ^
         (1ULL << n));
@@ -169,7 +150,8 @@ std::vector<int> concat(std::vector<std::vector<int>> a) {
 std::vector<int> rand_int(int size) {
   std::vector<int> out;
   for (int i = 0; i < size; i++) {
-    out.push_back(std::round(((double)std::rand()/(double)RAND_MAX) * (MAX - MIN) + MIN));
+    out.push_back(std::round(
+        ((double)std::rand() / (double)RAND_MAX) * (MAX - MIN) + MIN));
   }
   return out;
 }
@@ -178,8 +160,10 @@ std::vector<Chromosome>
 get_generation(std::optional<std::vector<Chromosome>> generation = std::nullopt,
                std::optional<std::pair<int, int>> best = std::nullopt) {
   std::vector<Chromosome> gen_;
-  std::cout << std::boolalpha << (bool)generation << " " <<  (bool)best << std::endl;
-  std::cout << std::boolalpha << (!(bool)generation && !(bool)best) << " " << std::endl;
+  std::cout << std::boolalpha << (bool)generation << " " << (bool)best
+            << std::endl;
+  std::cout << std::boolalpha << (!(bool)generation && !(bool)best) << " "
+            << std::endl;
 
   if (!generation && !best) {
     std::cout << "1" << std::endl;
@@ -217,7 +201,7 @@ public:
       auto tmp = in[i];
       for (int j = 0; j < this->biases.size(); j++) {
         std::cout << 5 << std::endl;
-        tmp = tmp * weights[j];
+        tmp = weights[j] * tmp;
         std::cout << tmp.n_elem << " " << biases[j].n_elem << std::endl;
         tmp = tmp + biases[j];
         this->activations[j](tmp);
@@ -235,7 +219,8 @@ double loss(NN network, batch output, batch expected,
   return FFNetwork(activations, network).loss(output, expected);
 }
 
-batch forward(NN network, batch tbatch, std::vector<std::function<void(arma::vec &)>> activations){
+batch forward(NN network, batch tbatch,
+              std::vector<std::function<void(arma::vec &)>> activations) {
   return FFNetwork(activations, network).forward(tbatch);
 }
 
@@ -258,7 +243,8 @@ double find(batch tbatch, batch expected,
   for (int i = 0; i < MAX_ITERATIONS; i++) {
     for (int j = 0; j < GEN_SIZE; i++) {
       std::cout << "2" << std::endl;
-      auto output = forward(NN{tmp[i].weights, tmp[i].biases}, tbatch, activations);
+      auto output =
+          forward(NN{tmp[i].weights, tmp[i].biases}, tbatch, activations);
       std::cout << "3" << std::endl;
       auto tmp2 = loss(NN{tmp[i].weights, tmp[i].biases}, output, expected,
                        activations);

@@ -3,35 +3,31 @@
 #include <cstdlib>
 #include <ctime>
 #include <functional>
-#include <ios>
 #include <iostream>
 #include <limits>
 #include <optional>
 #include <utility>
 #include <vector>
 
-#define GEN_SIZE 10
+#define GEN_SIZE 30
 #define IN 2
 #define OUT 1
 
-#define CHANCE 0.33
+#define CHANCE 0.90
 #define DOUBLE_MUT 1
 
 #define MIN 2
 #define MAX 4
 #define IN_LENGTH 2
 
-#define MAX_ITERATIONS 1000
+#define MAX_ITERATIONS 10000
 
 typedef std::vector<arma::Mat<double>> tensor;
 using batch = std::vector<arma::vec>;
 
 double mse(batch a, batch b) {
   double out;
-  std::cout << "1" << std::endl;
   for (int i = 0; i < a.size(); i++) {
-    a[i].print();
-    b[i].print();
     out += arma::accu(arma::pow(static_cast<arma::vec>(a[i] - b[i]), 2)) /
            a.size();
   }
@@ -50,13 +46,9 @@ public:
   std::vector<arma::vec> biases;
 };
 
-std::vector<std::function<void(Chromosome &)>> mutations;
-
 std::vector<Chromosome> gen(std::vector<int> sizes, int size) {
   for (auto a : sizes) {
-    std::cout << a << ", ";
   }
-  std::cout << size << std::endl;
   std::vector<Chromosome> out;
   for (int i = 0; i < size; i++) {
     tensor weights;
@@ -98,19 +90,22 @@ Chromosome crossover(Chromosome &a, Chromosome &b) {
             r_choice() ? a.biases : b.biases);
 }
 
-void mutate(Chromosome &ch, double chance, bool double_mut) {
-  do {
-    if (r_choice(chance))
-      r_choice(mutations)(ch);
-    else
-      return;
-  } while (double_mut);
+// Option 2
+Chromosome crossover2(Chromosome &a, Chromosome &b) {
+  Chromosome out;
+  for (int i = 0; i < a.biases.size(); i++) {
+    bool decision = r_choice();
+    out.biases.push_back(std::move(decision ? a.biases[i] : b.biases[i]));
+    out.weights.push_back(std::move(decision ? a.weights[i] : b.weights[i]));
+    out.size.push_back(decision ? a.size[i] : b.size[i]);
+  }
+  return out;
 }
 
 void random_change_weighted(Chromosome &ch) {
   if (r_choice()) {
-    int layer = std::floor(((double)std::rand() / (double)RAND_MAX) *
-                           ch.weights.size());
+    int layer =
+        std::floor(((double)std::rand() / (double)RAND_MAX) * (IN_LENGTH + 1));
     std::pair<int, int> pos = std::make_pair(
         ((double)std::rand() / (double)RAND_MAX) * ch.weights[layer].n_rows,
         ((double)std::rand() / (double)RAND_MAX) * ch.weights[layer].n_cols);
@@ -121,16 +116,26 @@ void random_change_weighted(Chromosome &ch) {
                                   ch.weights[layer](pos.first, pos.second)) ^
                               (1ULL << n));
   } else {
-    int layer = std::floor(((double)std::rand() / (double)RAND_MAX) *
-                           ch.weights.size());
+    int layer =
+        std::floor(((double)std::rand() / (double)RAND_MAX) * (IN_LENGTH + 1));
     int pos =
         ((double)std::rand() / (double)RAND_MAX) * ch.biases[layer].n_elem;
     int n = floor(((double)std::rand() / (double)RAND_MAX) *
-                  65); // bitte sei nicht 65...
-    ch.weights[layer](pos) = std::bit_cast<double>(
-        std::bit_cast<unsigned long long>(ch.weights[layer](pos)) ^
-        (1ULL << n));
+                  64); // bitte sei nicht 65...
+    ch.biases[layer](pos) = std::bit_cast<double>(
+        std::bit_cast<unsigned long long>(ch.biases[layer](pos)) ^ (1ULL << n));
   }
+}
+std::vector<std::function<void(Chromosome &)>> mutations = {
+    random_change_weighted};
+
+void mutate(Chromosome &ch, double chance, bool double_mut) {
+  do {
+    if (r_choice(chance)) {
+      r_choice(mutations)(ch);
+    } else
+      return;
+  } while (double_mut);
 }
 
 void next_gen(std::vector<Chromosome> &a) {
@@ -160,22 +165,16 @@ std::vector<Chromosome>
 get_generation(std::optional<std::vector<Chromosome>> generation = std::nullopt,
                std::optional<std::pair<int, int>> best = std::nullopt) {
   std::vector<Chromosome> gen_;
-  std::cout << std::boolalpha << (bool)generation << " " << (bool)best
-            << std::endl;
-  std::cout << std::boolalpha << (!(bool)generation && !(bool)best) << " "
-            << std::endl;
-
   if (!generation && !best) {
-    std::cout << "1" << std::endl;
     gen_ = gen(concat({{IN}, rand_int(IN_LENGTH), {OUT}}), GEN_SIZE);
   } else {
-    std::vector<Chromosome> c(
-        IN_LENGTH,
-        Chromosome{std::vector<int>(), tensor(), std::vector<arma::vec>()});
-    std::for_each(c.begin(), c.end(), [&](Chromosome &d) {
-      return crossover((*generation)[best->first], (*generation)[best->second]);
-    });
+    std::vector<Chromosome> c(GEN_SIZE, Chromosome{std::vector<int>(), tensor(),
+                                                   std::vector<arma::vec>()});
+    for (int i = 0; i < c.size(); i++) {
+      c[i] = crossover((*generation)[best->first], (*generation)[best->second]);
+    }
     gen_ = c;
+    next_gen(gen_);
   }
   return gen_;
 }
@@ -194,15 +193,11 @@ public:
   }
 
   std::vector<arma::vec> forward(batch in) {
-    std::cout << "arrived" << std::endl;
     batch output;
     for (int i = 0; i < in.size(); i++) {
-      std::cout << 4 << std::endl;
       auto tmp = in[i];
       for (int j = 0; j < this->biases.size(); j++) {
-        std::cout << 5 << std::endl;
         tmp = weights[j] * tmp;
-        std::cout << tmp.n_elem << " " << biases[j].n_elem << std::endl;
         tmp = tmp + biases[j];
         this->activations[j](tmp);
       }
@@ -237,36 +232,40 @@ double find(batch tbatch, batch expected,
   std::pair<int, int> indices;
   std::pair<double, double> best_losses = {std::numeric_limits<double>::max(),
                                            std::numeric_limits<double>::max()};
-  std::cout << "1" << std::endl;
   generation tmp = get_generation();
-  std::cout << "1" << std::endl;
   for (int i = 0; i < MAX_ITERATIONS; i++) {
-    for (int j = 0; j < GEN_SIZE; i++) {
-      std::cout << "2" << std::endl;
+    for (int j = 0; j < GEN_SIZE; j++) {
       auto output =
-          forward(NN{tmp[i].weights, tmp[i].biases}, tbatch, activations);
-      std::cout << "3" << std::endl;
-      auto tmp2 = loss(NN{tmp[i].weights, tmp[i].biases}, output, expected,
+          forward(NN{tmp[j].weights, tmp[j].biases}, tbatch, activations);
+      auto tmp2 = loss(NN{tmp[j].weights, tmp[j].biases}, output, expected,
                        activations);
-      std::cout << tmp2 << std::endl;
       if (tmp2 < best_losses.second) {
         if (tmp2 < best_losses.first) {
-          indices.first = i;
+          indices.first = j;
           best_losses.second = best_losses.first;
           best_losses.first = tmp2;
-        } else {
-          indices.second = i;
+        } else if (tmp2 != best_losses.second) {
+          indices.second = j;
           best_losses.second = tmp2;
         }
       }
     }
 
+    /*
     if (i % 10 == 0)
-      std::cout << best_losses.first << " " << best_losses.second << std::endl;
+      std::cout << "best losses: " << best_losses.first << " "
+                << best_losses.second << std::endl;
+    */
 
     tmp = get_generation(std::make_optional(tmp), std::make_optional(indices));
     best_losses = {std::numeric_limits<double>::max(),
                    std::numeric_limits<double>::max()};
+  }
+  auto res = forward(NN{tmp[indices.first].weights, tmp[indices.first].biases},
+                     tbatch, activations);
+  for (int x = 0; x < 4; x++) {
+    std::cout << "results from the best network: " << tbatch[x][0] << ", "
+              << tbatch[x][1] << " -> " << res[x][0] << std::endl;
   }
   return best_losses.first;
 }

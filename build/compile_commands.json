@@ -1,7 +1,0 @@
-[
-{
-  "directory": "/home/bassneptun/NN/build",
-  "command": "/usr/bin/c++   --debug -std=gnu++20 -o CMakeFiles/main.dir/classical.cpp.o -c /home/bassneptun/NN/classical.cpp",
-  "file": "/home/bassneptun/NN/classical.cpp"
-}
-]

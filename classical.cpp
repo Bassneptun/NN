@@ -7,7 +7,6 @@
 #include <functional>
 #include <iostream>
 #include <iterator>
-#include <limits>
 #include <memory>
 #include <optional>
 #include <random>
@@ -17,9 +16,14 @@
 
 #include "rapidcsv.h"
 
+#define WIDTH 28
+#define BREATH 28
+
+constinit int PIXELS = WIDTH * BREATH;
+
 #define GEN_SIZE 30
-#define IN 2
-#define OUT 1
+#define IN PIXELS
+#define OUT 10
 
 #define EV_STRATEGIE_CHANCE 0.25
 #define CHANCE 0.90
@@ -30,8 +34,8 @@
 #define MAX 5       // größte beim initialisieren
 #define IN_LENGTH 5 // initiale hidden layers
 
-#define MAX_EXPANSION_SIZE 1000
-#define MAX_C_EXPANSION_SIZE 10 // max kernels
+#define MAX_EXPANSION_SIZE 10000
+#define MAX_C_EXPANSION_SIZE 100 // max kernels
 
 #define KERNEL_SIZE 3
 
@@ -47,6 +51,26 @@ std::vector<std::function<void(arma::vec &)>> activationsD;
 
 typedef std::vector<arma::Mat<double>> tensor;
 using batch = std::vector<arma::vec>;
+
+bool r_choice() {
+  std::uniform_real_distribution<double> dist;
+  return dist(generator) > .5;
+}
+bool r_choice(double chance) {
+  std::uniform_real_distribution<double> dist;
+  return dist(generator) < chance;
+}
+
+template <typename T> T r_choice(std::vector<T> a) {
+  std::uniform_int_distribution<int> dist(0, a.size() - 1);
+  return a[dist(generator)];
+}
+
+int randint(int min, int max) {
+  assert(min <= max);
+  std::uniform_int_distribution<int> dist(min, max);
+  return dist(generator);
+}
 
 double mse(batch a, batch b) {
   double out;
@@ -75,30 +99,349 @@ arma::vec mseD(batch a, batch b) {
 
 arma::vec mseD(arma::vec a, arma::vec b) { return a - b; }
 
-struct NN {
-  tensor weights;
-  std::vector<arma::vec> biases;
+void sigmoid(arma::vec &in) { in = 1 / (1 + arma::exp(-in)); }
+
+void softmax(arma::mat &in) { in = arma::exp(in) / (arma::sum(arma::exp(in))); }
+
+void tanh(arma::mat &in) { in = arma::tanh(in); }
+
+void sigmoidD(arma::vec &in) {
+  in = arma::exp(-in) / (arma::pow(1 + arma::exp(-in), 2));
+}
+
+void relu(arma::vec &in) { in = (in + arma::abs(in)) / 2; }
+void reluD(arma::vec &in) {
+  in = in.transform([](double a) { return static_cast<double>(a >= 0); });
+}
+
+class Layer {
+public:
+  virtual arma::cube &forward(arma::cube &input) = 0;
+  virtual std::complex<int>
+  resize() = 0; // resize and tell the next layer you resized
+  virtual std::complex<int>
+      resize(std::complex<int>) = 0; // respond to last layer resizing
+  virtual double *get_element() = 0;
+  virtual std::unique_ptr<Layer> clone() const = 0;
 };
 
+class FCLayer : public Layer { // fully connected
+private:
+  std::function<void(arma::mat &)> activation;
+  arma::mat weights;
+  arma::vec biases;
+
+public:
+  FCLayer(std::function<void(arma::mat &)> activation, arma::cube weights,
+          arma::vec biases)
+      : activation(activation), weights(weights), biases(biases) {}
+  FCLayer(std::function<void(arma::mat &)> activation,
+          std::pair<int, int> sizes) {
+    this->activation = activation;
+    this->biases = arma::randu<arma::vec>(sizes.first);
+    this->weights = arma::randu<arma::mat>(sizes.first, sizes.second);
+  }
+  arma::cube &forward(arma::cube &input) override {
+    input.slice(0).col(0) = input.slice(0).col(0) * weights + biases;
+    activation(input.slice(0));
+    return input;
+  }
+  std::complex<int> resize() override {
+    if (this->biases.n_elem >= MAX_EXPANSION_SIZE)
+      return 0;
+    int n = r_choice() ? 1 : -1;
+    if (this->biases.n_elem <= 10)
+      n = 1;
+    weights.resize(weights.n_rows + n, weights.n_cols);
+    biases.resize(biases.n_elem + n);
+    if (n == 1) {
+      weights.row(weights.n_rows - 1).randu();
+      biases(biases.n_elem - 1) = arma::randu();
+      return std::complex<int>(n, 1);
+    }
+    return std::complex<int>(n, 1);
+  }
+
+  std::complex<int> resize(std::complex<int> change) override {
+    if (change.imag() == 0) {
+      weights.resize(weights.n_rows + change.real(), weights.n_cols);
+      biases.resize(biases.n_elem + change.real());
+      if (change.real() == std::abs(change.real())) {
+        for (int i = weights.n_rows - change.real() - 1; i < weights.n_rows;
+             i++) {
+          weights.row(i).randu();
+          biases(i) = arma::randu();
+        }
+      }
+    } else {
+      weights.resize(weights.n_rows, weights.n_cols + change.real());
+      if (change.real() == std::abs(change.real())) {
+        for (int i = weights.n_cols - change.real() - 1; i < weights.n_cols;
+             i++) {
+          weights.col(i).randu();
+        }
+      }
+      return 0;
+    }
+    return change;
+  }
+
+  double *get_element() override {
+    if (r_choice())
+      return &weights(randint(0, weights.n_rows - 1),
+                      randint(0, weights.n_cols - 1));
+    else
+      return &biases(randint(0, biases.n_elem - 1));
+  }
+
+  std::unique_ptr<Layer> clone() const override {
+    return std::make_unique<FCLayer>(*this);
+  }
+};
+
+class Flatten : public Layer {
+public:
+  Flatten() {}
+
+  arma::cube &forward(arma::cube &input) override {
+    input.slice(0).col(0) = arma::vectorise(input);
+    return input;
+  }
+
+  std::complex<int> resize() override { return 0; }
+  std::complex<int> resize(std::complex<int> change) override { return change; }
+  double *get_element() override { return nullptr; }
+  std::unique_ptr<Layer> clone() const override {
+    return std::make_unique<Flatten>(*this);
+  }
+};
+
+inline arma::mat conv2_valid(const arma::mat &A, const arma::mat &B) {
+  arma::mat full = arma::conv2(A, B, "full");
+
+  if (A.n_rows < B.n_rows || A.n_cols < B.n_cols)
+    return arma::mat();
+
+  arma::uword start_row = B.n_rows - 1;
+  arma::uword start_col = B.n_cols - 1;
+
+  arma::uword end_row = start_row + (A.n_rows - B.n_rows);
+  arma::uword end_col = start_col + (A.n_cols - B.n_cols);
+
+  return full.submat(start_row, start_col, end_row, end_col);
+}
+class CLayer : public Layer { // Convolution-layer
+private:
+  std::vector<arma::mat> kernels;
+  arma::vec biases;
+  std::function<void(arma::mat &)> activation;
+
+public:
+  CLayer(std::vector<arma::mat> kernels, arma::vec biases,
+         std::function<void(arma::mat &)> activation)
+      : kernels(kernels), biases(biases), activation(activation) {}
+  CLayer(std::function<void(arma::mat &)> activation,
+         std::pair<int, int> size) {
+    this->kernels = std::vector<arma::mat>(
+        size.first, arma::randu<arma::mat>(KERNEL_SIZE, KERNEL_SIZE));
+    this->biases = arma::randu<arma::vec>(size.first);
+  }
+  arma::cube &forward(arma::cube &input) override {
+    auto tmp = arma::cube(input.n_rows - kernels[0].n_rows + 1,
+                          input.n_cols - kernels[0].n_cols + 1, kernels.size());
+    for (int i = 0; i < kernels.size(); i++) {
+      tmp.slice(i) =
+          conv2_valid(input.slice(0), kernels[i]) + biases(i);
+      activation(tmp.slice(i));
+    }
+    input = tmp;
+    return input;
+  }
+  std::complex<int> resize() override {
+    if (this->kernels.size() >= MAX_C_EXPANSION_SIZE)
+      return 0;
+    int n = r_choice() ? 1 : -1;
+    if (this->kernels.size() <= 4)
+      n = 1;
+    if (n == 1) {
+      this->kernels.push_back(arma::randu<arma::mat>(KERNEL_SIZE, KERNEL_SIZE));
+      this->biases.resize(biases.n_elem + 1);
+      this->biases(biases.n_elem - 1) = arma::randu();
+    } else {
+      this->kernels.erase(this->kernels.end());
+      this->biases.resize(biases.n_elem - 1);
+    }
+    return std::complex<int>(n, 1);
+  }
+  std::complex<int> resize(std::complex<int> change) override { return change; }
+  double *get_element() override {
+    int k = randint(0, kernels.size() - 1);
+    if (r_choice(0.80)) {
+      return &this->kernels[k](
+          randint(kernels[k].n_rows - 1, kernels[k].n_cols - 1));
+    }
+    return &this->biases(k);
+  }
+
+  std::unique_ptr<Layer> clone() const override {
+    return std::make_unique<CLayer>(*this);
+  }
+};
+
+/*
+arma::cube to_cube(arma::vec input) {
+  arma::cube out = arma::cube(1, input.n_elem, 1);
+  out.slice(0).col(0) = input;
+  return out;
+}
+*/
+
+arma::cube to_cube(arma::mat input) {
+  arma::cube out = arma::cube(input.n_rows, input.n_cols, 1);
+  out.slice(0) = input;
+  return out;
+}
+
+class GNetwork {
+private:
+  std::vector<std::unique_ptr<Layer>> layers;
+
+public:
+  int size() const { return layers.size(); }
+
+  GNetwork() = default;
+
+  // GNetwork(const GNetwork&) = delete;
+  // GNetwork& operator=(const GNetwork&) = delete;
+  GNetwork(GNetwork &&) noexcept = default;
+  GNetwork &operator=(GNetwork &&) noexcept = default;
+
+  // deep copy constructor
+  GNetwork(const GNetwork &other) {
+    layers.reserve(other.layers.size());
+    for (const auto &l : other.layers)
+      layers.push_back(l->clone()); // requires Layer::clone()
+  }
+
+  GNetwork &operator=(const GNetwork &other) {
+    if (this != &other) {
+      layers.clear();
+      layers.reserve(other.layers.size());
+      for (const auto &l : other.layers)
+        layers.push_back(l->clone());
+    }
+    return *this;
+  }
+
+  GNetwork(std::vector<std::unique_ptr<Layer>> &&layers_) {
+    this->layers = std::move(layers_);
+  }
+  batch forward(std::vector<arma::mat> input) {
+    batch out;
+    for (auto in : input) {
+      auto tmp_input = to_cube(in);
+      arma::cube tmp = layers[0]->forward(tmp_input);
+      for (int j = 1; j < layers.size(); j++) {
+        tmp = layers[j]->forward(tmp);
+      }
+      out.push_back(tmp);
+    }
+    return out;
+  }
+
+  double loss(batch output, batch expected) {
+    return cross_entropy(output, expected);
+  }
+
+  void resize(int layer) {
+    std::complex<int> response = this->layers[layer]->resize();
+    while (response != 0 && layer < layers.size() - 1) {
+      layer++;
+      response = this->layers[layer]->resize(response);
+    }
+  }
+
+  double *get_element() {
+    int layer = randint(0, layers.size() - 1);
+    auto tmp = this->layers[layer]->get_element();
+    if (tmp) {
+      return tmp;
+    }
+    return this->get_element();
+  }
+
+  void append(std::unique_ptr<Layer> &&item) {
+    this->layers.push_back(std::move(item));
+  }
+};
+
+/*
 class Chromosome {
 public:
   tensor weights;
   std::vector<arma::vec> biases;
   std::pair<double, double> ev_strategie;
 };
+*/
+
+class Chromosome {
+public:
+  Chromosome() {}
+  Chromosome(GNetwork &net, std::pair<double, double> str_ev)
+      : network(std::move(net)), ev_strategie(str_ev) {}
+  GNetwork network;
+  std::pair<double, double> ev_strategie;
+};
 
 std::function<void(Chromosome &)> current_mutation;
 
-std::vector<Chromosome> gen(std::vector<int> sizes, int size) {
+enum LType {
+  FULLY_CONNECTED,
+  CONVOLUTION,
+  FLATTEN,
+};
+
+std::string ltypetostring(LType t) {
+  switch (t) {
+  case FULLY_CONNECTED:
+    return "FULLY_CONNECTED";
+  case CONVOLUTION:
+    return "CONVOLUTION";
+  case FLATTEN:
+    return "FLATTEN";
+  }
+}
+
+struct LayerType {
+  enum LType type;
+  std::optional<std::pair<int, int>> info;
+  std::optional<std::function<void(arma::mat &)>> activation;
+};
+
+std::vector<Chromosome> gen(const std::vector<LayerType> &layers, int size) {
   std::vector<Chromosome> out;
   for (int i = 0; i < size; i++) {
-    tensor weights;
-    std::vector<arma::vec> biases;
-    for (int j = 1; j < sizes.size(); j++) {
-      weights.push_back(arma::mat(sizes[j], sizes[j - 1], arma::fill::randu));
-      biases.push_back(arma::vec(sizes[j], arma::fill::randu));
+    GNetwork net;
+    for (int j = 0; j < layers.size(); j++) {
+      if (layers[j].info)
+        std::cout << "Chromosome " << i << ": " << ltypetostring(layers[j].type)
+                  << ", " << layers[j].info->first << ", "
+                  << layers[j].info->second << std::endl;
+      switch (layers[j].type) {
+      case FULLY_CONNECTED:
+        net.append(std::move(std::unique_ptr<FCLayer>(
+            new FCLayer(*layers[j].activation, *layers[j].info))));
+        break;
+      case FLATTEN:
+        net.append(std::move(std::unique_ptr<Flatten>(new Flatten())));
+        break;
+      case CONVOLUTION:
+        net.append(std::move(std::unique_ptr<CLayer>(
+            new CLayer(*layers[j].activation, *layers[j].info))));
+        break;
+      }
     }
-    out.push_back(Chromosome{weights, biases, std::make_pair(0, 1)});
+    out.push_back(Chromosome{net, std::make_pair(0, 1)});
   }
   return out;
 }
@@ -111,32 +454,7 @@ std::vector<int> extract_size(tensor x) {
   return out;
 }
 
-Chromosome mv(tensor weights, std::vector<arma::vec> biases,
-              std::pair<double, double> ev_strategie) {
-  return Chromosome{std::move(weights), std::move(biases),
-                    std::move(ev_strategie)};
-}
-
-bool r_choice() {
-  std::uniform_real_distribution<double> dist;
-  return dist(generator) > .5;
-}
-bool r_choice(double chance) {
-  std::uniform_real_distribution<double> dist;
-  return dist(generator) < chance;
-}
-
-template <typename T> T r_choice(std::vector<T> a) {
-  std::uniform_int_distribution<int> dist(0, a.size() - 1);
-  return a[dist(generator)];
-}
-
-int randint(int min, int max) {
-  assert(min <= max);
-  std::uniform_int_distribution<int> dist(min, max);
-  return dist(generator);
-}
-
+/*
 // Option 1
 Chromosome crossover(Chromosome &a, Chromosome &b) {
   return mv(r_choice() ? a.weights : b.weights,
@@ -175,6 +493,7 @@ void random_change_weighted(Chromosome &ch) {
         std::bit_cast<unsigned long long>(ch.biases[layer](pos)) ^ (1ULL << n));
   }
 }
+*/
 
 void gaussian(Chromosome &ch) {
   std::normal_distribution<double> gaussian(ch.ev_strategie.first,
@@ -186,17 +505,7 @@ void gaussian(Chromosome &ch) {
       ch.ev_strategie.second += gaussian(generator);
     }
   }
-  if (r_choice()) {
-    int layer = randint(0, IN_LENGTH);
-    std::pair<int, int> pos =
-        std::make_pair(randint(0, ch.weights[layer].n_rows - 1),
-                       randint(0, ch.weights[layer].n_cols - 1));
-    ch.weights[layer](pos.first, pos.second) += gaussian(generator);
-  } else {
-    int layer = randint(0, IN_LENGTH);
-    int pos = randint(0, ch.biases[layer].n_elem - 1);
-    ch.biases[layer](pos) += gaussian(generator);
-  }
+  *ch.network.get_element() += gaussian(generator);
 }
 
 void cauchy(Chromosome &ch) {
@@ -209,44 +518,13 @@ void cauchy(Chromosome &ch) {
       ch.ev_strategie.second += cauchy_(generator);
     }
   }
-  if (r_choice()) {
-    int layer = randint(0, IN_LENGTH);
-    // std::cout << "weigths_info: n_elem{" << ch.weights[layer].n_elem
-    //           << "} n_rows{" << ch.weights[layer].n_rows << "} n_cols {"
-    //           << ch.weights[layer].n_cols << "}" << std::endl;
-    std::pair<int, int> pos =
-        std::make_pair(randint(0, ch.weights[layer].n_rows - 1),
-                       randint(0, ch.weights[layer].n_cols - 1));
-    ch.weights[layer](pos.first, pos.second) += cauchy_(generator);
-  } else {
-    int layer = randint(0, IN_LENGTH);
-    // std::cout << "biases_info: n_elem{" << ch.biases[layer].n_elem << "}"
-    //           << std::endl;
-    int pos = randint(0, ch.biases[layer].n_elem - 1);
-    ch.biases[layer](pos) += cauchy_(generator);
-  }
+  *ch.network.get_element() += cauchy_(generator);
 }
 
 void resize(Chromosome &ch) {
-  int layer = randint(1, ch.biases.size() -
+  int layer = randint(1, ch.network.size() -
                              2); // IN und OUT Layer müssen die Größe einhalten
-  if (ch.biases[layer].n_elem > MAX_EXPANSION_SIZE)
-    return;
-  else if (ch.biases[layer].n_elem < MIN + 1)
-    return;
-  int n = r_choice() ? 1 : -1;
-  ch.weights[layer].resize(ch.weights[layer].n_rows + n,
-                           ch.weights[layer].n_cols);
-  ch.weights[layer + 1].resize(ch.weights[layer + 1].n_rows,
-                               ch.weights[layer + 1].n_cols + n);
-  if (n == 1) {
-    ch.weights[layer].row(ch.weights[layer].n_rows - 1).randu();
-    ch.weights[layer + 1].col(ch.weights[layer + 1].n_cols - 1).randu();
-  }
-  // biases sind nicht verstrickt
-  ch.biases[layer].resize(ch.biases[layer].n_elem + n);
-  if (n == 1)
-    ch.biases[layer](ch.biases[layer].n_elem - 1) = arma::randu();
+  ch.network.resize(layer);
 }
 
 std::vector<std::function<void(Chromosome &)>> mutations = {cauchy, gaussian};
@@ -309,6 +587,7 @@ std::vector<int> rand_int(int size) {
   return out;
 }
 
+/*
 std::vector<Chromosome> get_generation_GA(
     std::optional<std::vector<Chromosome>> generation = std::nullopt,
     std::optional<std::pair<int, int>> best = std::nullopt) {
@@ -326,167 +605,6 @@ std::vector<Chromosome> get_generation_GA(
   }
   return gen_;
 }
-
-class Layer {
-public:
-  virtual arma::cube &forward(arma::cube &input);
-  virtual std::complex<int>
-  resize(); // resize and tell the next layer you resized
-  virtual std::complex<int>
-      resize(std::complex<int>); // respond to last layer resizing
-  virtual double* get_element();
-};
-
-class FCLayer : public Layer { // fully connected
-private:
-  std::function<void(arma::mat &)> activation;
-  arma::mat weights;
-  arma::vec biases;
-
-public:
-  FCLayer(std::function<void(arma::mat &)> activation, arma::cube weights,
-          arma::vec biases)
-      : activation(activation), weights(weights), biases(biases) {}
-  arma::cube &forward(arma::cube &input) override {
-    input.slice(0).col(0) = input.slice(0).col(0) * weights + biases;
-    activation(input.slice(0));
-    return input;
-  }
-  std::complex<int> resize() override {
-    if (this->biases.n_elem <= MAX_EXPANSION_SIZE)
-      return 0;
-    int n = r_choice() ? 1 : -1;
-    weights.resize(weights.n_rows + n, weights.n_cols);
-    biases.resize(biases.n_elem + n);
-    if (n == 1) {
-      weights.row(weights.n_rows - 1).randu();
-      biases(biases.n_elem-1) = arma::randu();
-      return std::complex<int>(n, 1);
-    }
-    return std::complex<int>(n, 1);
-  }
-
-  std::complex<int> resize(std::complex<int> change) override {
-    if (change.imag() == 0) {
-      weights.resize(weights.n_rows + change.real(), weights.n_cols);
-      biases.resize(biases.n_elem + change.real());
-      if (change.real() == std::abs(change.real())) {
-        for (int i = weights.n_rows - change.real() - 1; i < weights.n_rows;
-             i++) {
-          weights.row(i).randu();
-          biases(i) = arma::randu();
-        }
-      }
-    } else {
-      weights.resize(weights.n_rows, weights.n_cols + change.real());
-      if (change.real() == std::abs(change.real())) {
-        for (int i = weights.n_cols - change.real() - 1; i < weights.n_cols;
-             i++) {
-          weights.col(i).randu();
-        }
-      }
-      return 0;
-    }
-    return change;
-  }
-
-  double* get_element() override {
-    if(r_choice()) return &weights(randint(0, weights.n_rows-1), randint(0, weights.n_cols-1));
-    else return &biases(randint(0, biases.n_elem - 1));
-  }
-};
-
-class Flatten : public Layer {
-public:
-  arma::cube &forward(arma::cube &input) override {
-    input.slice(0).col(0) = arma::vectorise(input);
-    return input;
-  }
-
-  std::complex<int> resize() override { return 0; }
-  std::complex<int> resize(std::complex<int> change) override { return change; }
-  double* get_element() override { return nullptr; }
-};
-
-class CLayer : public Layer { // Convolution-layer
-private:
-  std::vector<arma::mat> kernels;
-  arma::vec biases;
-  std::function<void(arma::mat &)> activation;
-
-public:
-  CLayer(std::vector<arma::mat> kernels, arma::vec biases,
-         std::function<void(arma::mat &)> activation)
-      : kernels(kernels), biases(biases), activation(activation) {}
-  arma::cube &forward(arma::cube &input) override {
-    auto tmp = arma::cube(input.n_rows - kernels[0].n_rows + 1,
-                          input.n_cols - kernels[0].n_cols + 1, kernels.size());
-    for (int i = 0; i < kernels.size(); i++) {
-      tmp.slice(i) =
-          arma::conv2(input.slice(0), kernels[i], "valid") + biases(i);
-      activation(tmp.slice(i));
-    }
-    input = tmp;
-    return input;
-  }
-  std::complex<int> resize() override {
-    if (this->kernels.size() >= MAX_C_EXPANSION_SIZE)
-      return 0;
-    int n = r_choice() ? 1 : -1;
-    if (n == 1){
-      this->kernels.push_back(arma::randu<arma::mat>(KERNEL_SIZE, KERNEL_SIZE));
-      this->biases.resize(biases.n_elem + 1);
-      this->biases(biases.n_elem - 1) = arma::randu();
-    }
-    else{
-      this->kernels.erase(this->kernels.end());
-      this->biases.resize(biases.n_elem - 1);
-    }
-    return std::complex<int>(n, 1);
-  }
-  std::complex<int> resize(std::complex<int> change) override { return change; }
-  double* get_element() override {
-
-  }
-};
-
-arma::cube to_cube(arma::vec input) {
-  auto out = arma::cube(input.n_elem, 1, 1);
-  out.slice(0).col(0) = input;
-  return out;
-}
-
-class GNetwork {
-public:
-  std::vector<std::unique_ptr<Layer>> layers;
-  GNetwork(std::vector<std::unique_ptr<Layer>> layers_) {
-    this->layers = std::move(layers_);
-  }
-  batch forward(batch input) {
-    batch out;
-    for (auto in : input) {
-      auto tmp_input = to_cube(in);
-      arma::cube tmp = layers[0]->forward(tmp_input);
-      for (int j = 1; j < layers.size(); j++) {
-        tmp = layers[j]->forward(tmp);
-      }
-      out.push_back(tmp);
-    }
-    return out;
-  }
-
-  double loss(batch output, batch expected) {
-    return cross_entropy(output, expected);
-  }
-
-  void resize(int layer) {
-    std::complex<int> response = this->layers[layer]->resize();
-    while (response != 0 && layer < layers.size()-1) {
-      layer++;
-      response = this->layers[layer]->resize(response);
-    }
-  }
-};
 
 class FFNetwork {
 public:
@@ -587,34 +705,34 @@ public:
   arma::vec lossD(batch a, batch b) { return mseD(a, b); }
   arma::vec lossD(arma::vec a, arma::vec b) { return mseD(a, b); }
 };
-
-double loss(NN network, batch output, batch expected,
-            std::vector<std::function<void(arma::vec &)>> activations) {
-  return FFNetwork(network).loss(output, expected);
-}
+*/
 
 double loss(Chromosome network, batch output, batch expected) {
-  NN network2 = NN{network.weights, network.biases};
-  return FFNetwork(network2).loss(output, expected);
+  return network.network.loss(output, expected);
 }
 
-batch forward(NN network, batch tbatch,
-              std::vector<std::function<void(arma::vec &)>> activations) {
-  return FFNetwork(network).forward(tbatch);
-}
-
-batch forward(Chromosome network, batch tbatch) {
-  NN network2 = NN{network.weights, network.biases};
-  return FFNetwork(network2).forward(tbatch);
+batch forward(Chromosome network, std::vector<arma::mat> tbatch) {
+  return network.network.forward(tbatch);
 }
 
 std::vector<Chromosome> get_generation_EP(
     std::optional<std::vector<Chromosome>> generation = std::nullopt,
-    batch tbatch = batch(), batch expected = batch()) {
+    std::vector<arma::mat> tbatch = std::vector<arma::mat>(),
+    batch expected = batch()) {
   std::vector<Chromosome> gen_;
   gen_.reserve(GEN_SIZE);
   if (!generation) {
-    gen_ = gen(concat({{IN}, {rand_int(IN_LENGTH)}, {OUT}}), GEN_SIZE);
+    int folds = randint(3, 8), n1 = randint(30, 300);
+    gen_ = std::move(
+        gen({{CONVOLUTION, std::make_optional(std::make_pair(folds, 0)),
+              std::make_optional([](auto a) { return tanh(a); })},
+             {FLATTEN, std::nullopt, std::nullopt},
+             {FULLY_CONNECTED,
+              std::make_optional(std::make_pair(folds * PIXELS, n1)),
+              std::make_optional([](auto a) { return tanh(a); })},
+             {FULLY_CONNECTED, std::make_optional(std::make_pair(n1, OUT)),
+              std::make_optional([](auto a) { return softmax(a); })}},
+            GEN_SIZE));
   } else {
     auto ranking = next_gen2(*generation);
     std::vector<size_t> indices(ranking.size());
@@ -642,6 +760,7 @@ std::pair<std::vector<arma::vec>, std::vector<arma::vec>> get_xor() {
 
 using generation = std::vector<Chromosome>;
 
+/*
 NN findM(batch tbatch, batch expected,
          std::vector<std::function<void(arma::vec &)>> activations) {
   std::pair<int, int> indices;
@@ -666,11 +785,9 @@ NN findM(batch tbatch, batch expected,
       }
     }
 
-    /*
     if (i % 10 == 0)
       std::cout << "best losses: " << best_losses.first << " "
                 << best_losses.second << std::endl;
-    */
 
     tmp =
         get_generation_GA(std::make_optional(tmp), std::make_optional(indices));
@@ -709,11 +826,9 @@ double findGA(batch tbatch, batch expected) {
       }
     }
 
-    /*
     if (i % 10 == 0)
       std::cout << "best losses: " << best_losses.first << " "
                 << best_losses.second << std::endl;
-    */
     tmp =
         get_generation_GA(std::make_optional(tmp), std::make_optional(indices));
     best_losses = {std::numeric_limits<double>::max(),
@@ -727,35 +842,21 @@ double findGA(batch tbatch, batch expected) {
   }
   return best_losses.first;
 }
+*/
 
-double findEP(batch tbatch, batch expected) {
+double findEP(std::vector<arma::mat> tbatch, batch expected) {
   generation tmp = get_generation_EP();
   for (int i = 0; i < MAX_ITERATIONS; i++) {
     tmp = get_generation_EP(std::make_optional(tmp), tbatch, expected);
     if (i > MAX_ITERATIONS / 4)
       current_mutation = gaussian;
   }
-  auto res = forward(NN{tmp[0].weights, tmp[0].biases}, tbatch, activations);
+  auto res = tmp[0].network.forward(tbatch);
   for (int x = 0; x < 4; x++) {
     std::cout << "results from the best network: " << tbatch[x][0] << ", "
               << tbatch[x][1] << " -> " << res[x][0] << std::endl;
   }
   return loss(tmp[0], res, expected);
-}
-
-void sigmoid(arma::vec &in) { in = 1 / (1 + arma::exp(-in)); }
-
-void softmax(arma::vec &in) { in = arma::exp(in) / (arma::sum(arma::exp(in))); }
-
-void tanh(arma::mat &in) { in = arma::tanh(in); }
-
-void sigmoidD(arma::vec &in) {
-  in = arma::exp(-in) / (arma::pow(1 + arma::exp(-in), 2));
-}
-
-void relu(arma::vec &in) { in = (in + arma::abs(in)) / 2; }
-void reluD(arma::vec &in) {
-  in = in.transform([](double a) { return static_cast<double>(a >= 0); });
 }
 
 std::pair<rapidcsv::Document, rapidcsv::Document> // (train, test)
@@ -768,7 +869,7 @@ get_mnist(std::string pathA = "/home/bassneptun/NN/mnist_train.csv",
 
 class labeled_data {
 public:
-  std::vector<arma::vec> in;
+  std::vector<arma::mat> in;
   std::vector<arma::vec> out;
 
   labeled_data() {}
@@ -779,10 +880,13 @@ public:
     for (int i = 0; i < in_.size(); i++) {
       arma::vec a = arma::zeros(10);
       a(in_[i][0]) = 1.;
-      this->in[i] = a;
-      arma::vec b(std::vector<double>(in_[i].begin() + 1, in_[i].end()));
-      b /= 255.;
-      this->out[i] = b;
+      this->out[i] = a;
+      in_[i].erase(in_[i].begin());
+      std::vector<double> v = std::vector<double>(in_[i].begin(), in_[i].end());
+      std::cout << v.size() << std::endl;
+      arma::mat b_mat = arma::reshape<arma::mat>(v, 28, 28);
+      b_mat /= 255.;
+      this->in[i] = b_mat;
     }
   }
 };
@@ -790,7 +894,7 @@ public:
 labeled_data convert(rapidcsv::Document doc) {
   labeled_data out;
   std::vector<std::vector<int>> acc;
-  for (int i = 0; i < doc.GetColumnCount(); i++) {
+  for (int i = 0; i < /*doc.GetRowCount()*/ 10; i++) {
     auto tmp = doc.GetRow<int>(i);
     acc.push_back(tmp);
   }
@@ -807,10 +911,10 @@ int main() {
   activationsD =
       std::vector<std::function<void(arma::vec &)>>(2 + IN_LENGTH, sigmoidD);
 
-  // double xor_loss = findEP(test.first, test.second);
   auto a = get_mnist();
   labeled_data train_data = convert(a.first);
-  labeled_data test_data = convert(a.second);
+  double xor_loss = findEP(train_data.in, train_data.out);
+  // labeled_data test_data = convert(a.second);
   std::cout << "MNIST: " << a.first.GetRowCount() << std::endl;
   // double xor_loss2 = findGA(test.first, test.second);
   //  std::cout << xor_loss << std::endl;

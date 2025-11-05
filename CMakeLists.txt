@@ -6,22 +6,23 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 project(NN)
 set(NN_VERSION 1.0)
 
-add_compile_options(--debug)
+add_compile_options(-O3)
 
-option(ENABLE_ASAN "Enable AddressSanitizer" OFF)
-option(ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
 
-if(ENABLE_ASAN)
-    message(STATUS "Building with AddressSanitizer")
-    add_compile_options(-fsanitize=address -fno-omit-frame-pointer -g)
-    add_link_options(-fsanitize=address)
-endif()
-
-if(ENABLE_UBSAN)
-    message(STATUS "Building with UndefinedBehaviorSanitizer")
-    add_compile_options(-fsanitize=undefined -fno-omit-frame-pointer -g)
-    add_link_options(-fsanitize=undefined)
-endif()
+#option(ENABLE_ASAN "Enable AddressSanitizer" OFF)
+#option(ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
+#
+#if(ENABLE_ASAN)
+#    message(STATUS "Building with AddressSanitizer")
+#    add_compile_options(-fsanitize=address -fno-omit-frame-pointer -g)
+#    add_link_options(-fsanitize=address)
+#endif()
+#
+#if(ENABLE_UBSAN)
+#    message(STATUS "Building with UndefinedBehaviorSanitizer")
+#    add_compile_options(-fsanitize=undefined -fno-omit-frame-pointer -g)
+#    add_link_options(-fsanitize=undefined)
+#endif()
 
 
 find_package(Armadillo REQUIRED)

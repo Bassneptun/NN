@@ -1,4 +1,5 @@
 #include <armadillo>
+#include <array>
 #include <cassert>
 #include <memory>
 #include <optional>
@@ -160,9 +161,14 @@ public:
   arma::ivec forward_mes(arma::vec inputs);
 };
 
+using ev_strategies = std::pair<double, double>;
+
+template <int N>
 class Generation{
 private: 
-
-private: 
+  std::array<Network, N> member;
+  std::array<ev_strategies, N> ev_strategies;
+  int max_iteration;
+public:
 
 }

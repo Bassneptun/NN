@@ -1,7 +1,9 @@
-cmake_minimum_required(VERSION 3.1)
+cmake_minimum_required(VERSION 3.31)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+set(Qenv_DIR "/usr/share/doc/libqenv-dev/")
 
 project(NN)
 set(NN_VERSION 1.0)
@@ -26,8 +28,11 @@ add_compile_options(-O3)
 
 
 find_package(Armadillo REQUIRED)
+find_package(Qenv REQUIRED)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_executable(main classical.cpp)
+add_executable(qmain quanten.cpp)
 target_link_libraries(main PRIVATE armadillo)
+target_link_libraries(qmain PRIVATE armadillo qenv)

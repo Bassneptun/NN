@@ -9,16 +9,21 @@
 #include <string>
 #include <utility>
 #include <vector>
-
-#include "classical.cpp"
+#include <function>
 
 namespace env {
 #include "qenv/libqenv.h"
 }
 
+
+std::random_device rd;
+std::minstd_rand generator(rd());
+
+void(vector<double>& 
+
 struct ev_strategies{
   std::pair<double, double> args;
-  
+  std::function<void(
 }
 
 class Layer {

@@ -10,9 +10,13 @@
 #include <utility>
 #include <vector>
 
+#include "classical.cpp"
+
 namespace env {
 #include "qenv/libqenv.h"
 }
+
+using ev_strategies = std::pair<double, double>;
 
 class Layer {
 public:
@@ -140,6 +144,8 @@ public:
     this->engine = this->create_engine();
   }
 
+  Network() = default;
+
   void generate_bytecode() {
     this->buffer = "";
     for (int i = 0; i < this->n; i++) {
@@ -161,15 +167,26 @@ public:
   arma::ivec forward_mes(arma::vec inputs);
 };
 
-using ev_strategies = std::pair<double, double>;
+Network create_network(ev_strategies ev, std::vector<std::unique_ptr<Layer>> layers = {std::make_unique(RotationLayer), std::make_unique(EntaglementLayer()), std::make_unique(RotationLayer()), std::make_unique(DetanglementLayer())){
+  // standard version: AngleEncoding -> RotationLayer -> Entanglement Layer -> RotationLayer -> DetanglementLayer 
+  auto out = Network();
+  out.encoding = AngleEncoding();
+  out.layers = layers;
+  return create_network;
+}
 
-template <int N>
+template <int N, int N2>
 class Generation{
 private: 
   std::array<Network, N> member;
   std::array<ev_strategies, N> ev_strategies;
   int max_iteration;
-  std::
 public:
-  Generation& get_generation(
+  Generation(){
+    std::normal_distribution<double> gaussian_(-1., 1.);
+    for(int i = 0; i < N; i++){
+      this->ev_strategies[i] = std::make_pair(gaussian_(generator), gaussian_(generator));
+      this->member[i] = create_network(this->ev_strategies[i]);
+    }
+  }
 }

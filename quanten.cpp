@@ -16,7 +16,10 @@ namespace env {
 #include "qenv/libqenv.h"
 }
 
-using ev_strategies = std::pair<double, double>;
+struct ev_strategies{
+  std::pair<double, double> args;
+  
+}
 
 class Layer {
 public:
@@ -94,6 +97,8 @@ public:
 
 class AngleEncoding : public Encoding {
   int size;
+public:
+  AngleEncoding(int size) : size(size) {}
   std::string code() override {
     std::stringstream ss;
     for (int i = 0; i < size; i++) {
@@ -112,6 +117,7 @@ class LiteralEncoding : public Encoding {
   int size;
 
 public:
+  LiteralEncoding(int size) : size(size){}
   std::string code() override {
     std::stringstream ss;
     for (int i = 0; i < size; i++) {
@@ -132,19 +138,18 @@ private:
   std::unique_ptr<Encoding> encoding;
   std::string buffer;
   std::optional<Engine> engine;
+  std::vector<double> arguments;
   int n;
 
 public:
   Network(std::vector<std::unique_ptr<Layer>> layers,
-          std::unique_ptr<Encoding> encoding, int n)
+          std::unique_ptr<Encoding> encoding, ev_strategies ev, int n)
       : encoding(std::move(encoding)), engine(std::nullopt) {
     for (int i = 0; i < layers.size(); i++) {
       this->layers.push_back(std::move(layers[i]));
     }
     this->engine = this->create_engine();
   }
-
-  Network() = default;
 
   void generate_bytecode() {
     this->buffer = "";
@@ -167,12 +172,10 @@ public:
   arma::ivec forward_mes(arma::vec inputs);
 };
 
-Network create_network(ev_strategies ev, std::vector<std::unique_ptr<Layer>> layers = {std::make_unique(RotationLayer), std::make_unique(EntaglementLayer()), std::make_unique(RotationLayer()), std::make_unique(DetanglementLayer())){
+template <int N2>
+Network create_network(ev_strategies ev, std::vector<std::unique_ptr<Layer>> layers = {std::make_unique(RotationLayer(N2, N2)), std::make_unique(EntaglementLayer(N2)), std::make_unique(RotationLayer(N2, 2*N2, true)), std::make_unique(DetanglementLayer(N2))){
   // standard version: AngleEncoding -> RotationLayer -> Entanglement Layer -> RotationLayer -> DetanglementLayer 
-  auto out = Network();
-  out.encoding = AngleEncoding();
-  out.layers = layers;
-  return create_network;
+  return Network(layers, std::make_unique(AngleEncoding(N2)), N2);
 }
 
 template <int N, int N2>

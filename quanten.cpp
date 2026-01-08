@@ -169,6 +169,7 @@ private:
   std::array<Network, N> member;
   std::array<ev_strategies, N> ev_strategies;
   int max_iteration;
+  std::
 public:
-
+  Generation& get_generation(
 }

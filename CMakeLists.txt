@@ -8,7 +8,7 @@ set(Qenv_DIR "/usr/share/doc/libqenv-dev/")
 project(NN)
 set(NN_VERSION 1.0)
 
-add_compile_options(-O3)
+#add_compile_options(-Wall -Wextra -pedantic -Wconversion -Wunused -Wshadow -Wold-style-cast -Wpointer-arith -Wcast-qual -Wmissing-prototypes -Wno-missing-braces)
 
 
 #option(ENABLE_ASAN "Enable AddressSanitizer" OFF)
@@ -32,7 +32,15 @@ find_package(Qenv REQUIRED)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-add_executable(main classical.cpp)
+#add_executable(main classical.cpp)
 add_executable(qmain quanten.cpp)
-target_link_libraries(main PRIVATE armadillo)
-target_link_libraries(qmain PRIVATE armadillo qenv)
+
+target_compile_options(qmain PRIVATE
+    -fsanitize=address
+    -fno-omit-frame-pointer
+    --debug
+    -O0
+)
+
+#target_link_libraries(main PRIVATE armadillo)
+target_link_libraries(qmain PRIVATE -fsanitize=address qenv armadillo )

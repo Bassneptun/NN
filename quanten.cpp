@@ -1,13 +1,10 @@
 #include <algorithm>
 #include <armadillo>
-#include <array>
 #include <cassert>
 #include <complex>
-#include <concepts>
 #include <cstddef>
 #include <functional>
 #include <iostream>
-#include <iterator>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -37,7 +34,7 @@ private:
   int arg_pos;
 
 public:
-  RotationLayer(int n, int arg_pos, bool entangled = false, string gate = "RZ")
+  RotationLayer(int n, int arg_pos, bool entangled = false, string gate = "RY")
       : gate(gate), n(n), entangled(entangled), arg_pos(arg_pos) {}
   string code() override {
     std::stringstream ss;
@@ -47,7 +44,7 @@ public:
       ss << "D" << this->gate << " \%b ??" << arg_pos << "\n";
     } else {
       for (int i = 0; i < this->n; i++) {
-        ss << this->gate << " $a" << i << " ??" << arg_pos << "\n";
+        ss << this->gate << " $a" << i << " ??" << arg_pos + i << "\n";
       }
     }
     return ss.str();
@@ -118,7 +115,10 @@ public:
       ss << "QAL & 0 $" << " \"a" << i << "\"\n";
     }
     for (int i = 0; i < size; i++) {
-      ss << "RX $a" << i << " ??" << i << "\n";
+      ss << "SET $a" << i << " 1 0" << "\n";
+    }
+    for (int i = 0; i < size; i++) {
+      ss << "RY $a" << i << " ??" << i << "\n";
     }
     return ss.str();
   }
@@ -155,6 +155,7 @@ public:
     int func;
     double ev_target = 0.4;
     double mut_chance;
+    bool double_mut;
   };
 
   std::vector<std::unique_ptr<Layer>> layers;
@@ -218,11 +219,16 @@ public:
 
   size_t size() const { return layers.size(); }
 
-  std::vector<Qbit> forward(const std::vector<double> &inputs) {
-    std::vector<double> tmp = inputs;
-    tmp.insert(tmp.end(), this->arguments.begin(), this->arguments.end());
-    this->engine->exe(tmp);
-    return this->engine->memory[0];
+  std::vector<std::vector<Qbit>>
+  forward(const std::vector<std::vector<double>> &inputs) {
+    std::vector<std::vector<Qbit>> out;
+    for (auto tmp : inputs) {
+      tmp.insert(tmp.end(), this->arguments.begin(), this->arguments.end());
+      this->engine->exe(tmp);
+      out.push_back(this->engine->memory[0]);
+      this->engine->clear();
+    }
+    return out;
   }
 };
 
@@ -236,9 +242,9 @@ int randint(int max) {
   return select(generator);
 }
 
-std::uniform_real_distribution<> s(0, 1.);
+std::uniform_real_distribution<double> s;
 
-bool choice(double chance = 0.5) { return chance < s(generator); }
+bool choice(double chance = 0.5) { return chance > s(generator); }
 
 template <typename T> T choice(std::vector<T> container) {
   return container[randint(container.size())];
@@ -249,14 +255,18 @@ template <typename T> T &choice(std::pair<T, T> &container) {
 }
 
 template <typename dist> void mutate(Network &net) {
-  dist mut(net.ev.params.first, net.ev.params.second);
-  if (choice(net.ev.ev_target)) {
-    net.arguments[static_cast<size_t>(randint(
-        static_cast<size_t>(net.arguments.size() - 1)))] += mut(generator);
-  } else {
-    choice(net.ev.params) += mut(generator);
-    net.ev.ev_target += mut(generator);
-    net.ev.mut_chance += mut(generator);
+  if (choice(net.ev.mut_chance)) {
+    dist mut(net.ev.params.first, net.ev.params.second);
+    if (choice(net.ev.ev_target)) {
+      net.arguments[randint(
+          net.arguments.size() - 1)] += mut(generator);
+    } else {
+      choice(net.ev.params) += mut(generator);
+      net.ev.ev_target += mut(generator);
+      net.ev.mut_chance += mut(generator);
+    }
+    if (!net.ev.double_mut)
+      return;
   }
 }
 
@@ -264,9 +274,8 @@ std::vector<std::function<void(Network &)>> mutation_operators = {
     [](Network &net) { mutate<std::normal_distribution<>>(net); },
     [](Network &net) { mutate<std::cauchy_distribution<>>(net); }};
 
-template <int N2>
 Network create_network(
-    Network::ev_strategies ev,
+    Network::ev_strategies ev, int N2 = 2,
     std::optional<std::vector<std::unique_ptr<Layer>>> layers = std::nullopt) {
   // standard version: AngleEncoding -> RotationLayer -> Entanglement Layer ->
   // RotationLayer -> DetanglementLayer
@@ -275,7 +284,7 @@ Network create_network(
     layers_.push_back(std::make_unique<RotationLayer>(RotationLayer(N2, N2)));
     layers_.push_back(std::make_unique<EntaglementLayer>(EntaglementLayer(N2)));
     layers_.push_back(
-        std::make_unique<RotationLayer>(RotationLayer(N2, 2 * N2 - 1, true)));
+        std::make_unique<RotationLayer>(RotationLayer(N2, 2 * N2, true)));
     layers_.push_back(
         std::make_unique<DetanglementLayer>(DetanglementLayer(N2)));
   } else {
@@ -286,27 +295,26 @@ Network create_network(
       std::make_unique<AngleEncoding>(AngleEncoding(N2));
   auto tmp = Network(std::move(layers_), std::move(tmp1), ev, N2);
   tmp.arguments = std::vector<double>();
-  for (int i = 0; i < N2; i++) {
+  for (int i = 0; i < N2 + 1; i++) {
     tmp.arguments.push_back(dist(generator));
   }
   return tmp;
 }
 
 Network::ev_strategies create_ev() {
-  return Network::ev_strategies{std::make_pair(-1., 1.), 0, 0.4, 0.5};
+  return Network::ev_strategies{std::make_pair(-1., 1.), 0, 0.4, 0.5, true};
 }
 
-template <typename data2, typename out, typename data>
-constexpr out loss(data res, data2 expected) {
-  return (res - expected) * (res - expected);
+double loss(std::vector<std::vector<Qbit>> res,
+            std::vector<std::vector<double>> expected) {
+  double ret = 0;
+  for (unsigned int i = 0; i < res.size(); i++) {
+    for (unsigned int j = 0; j < expected[0].size(); j++) {
+      ret += std::pow(std::norm(res[i][j].get()(0)) - expected[i][j], 2);
+    }
+  }
+  return ret / res.size();
 }
-
-template <typename T, typename U>
-concept Subtractable = requires(T a, U b) {
-  {
-    loss<U, double>(create_network<1>(create_ev()).forward(a), b)
-  } -> std::convertible_to<double>;
-};
 
 std::vector<unsigned int> create_first_n(unsigned int n) {
   std::vector<unsigned int> out(n);
@@ -316,21 +324,20 @@ std::vector<unsigned int> create_first_n(unsigned int n) {
   return out;
 }
 
-template <int N, int N2, typename T, typename U>
-  requires Subtractable<T, U>
 class Generation {
 private:
   std::vector<Network> members;
-  int max_iteration;
+  unsigned int max_iteration;
+  unsigned int N;
 
 public:
-  Generation(int max_iteration) : max_iteration(max_iteration) {
+  Generation(unsigned int max_iteration, unsigned int N) : max_iteration(max_iteration), N(N) {
     std::normal_distribution<double> gaussian_(-1., 1.);
     for (unsigned int i = 0; i < N; i++) {
       auto tmp = Network::ev_strategies{
           std::make_pair(gaussian_(generator), gaussian_(generator)), 0, 0.4,
-          0.5};
-      auto tmp2 = create_network<N2>(tmp);
+          0.5, true};
+      auto tmp2 = create_network(tmp);
       this->members.push_back(tmp2);
       this->members[i].ev = tmp;
     }
@@ -347,26 +354,43 @@ public:
     }
   }
 
-  void insert(std::vector<Network> &values) {
-    auto indices = create_first_n(N);
-    for (unsigned int i = 0; i < static_cast<int>(N / 3); i++) {
-      unsigned int index = randint(N - i);
-      auto val = indices[index];
-      indices.erase(indices.begin() + index);
-      this->members[val] = values[i];
+  void insert(std::vector<Network> &values, std::vector<std::vector<double>> in,
+              std::vector<std::vector<double>> expected) {
+    std::vector<size_t> indices = this->get_worst(in, expected);
+    for(size_t i = 0; i < indices.size(); i++){
+      this->members[indices[i]] = values[i];
     }
   }
 
-  std::vector<Network> get_best(std::vector<T> in, std::vector<U> expected, Generation &ranking) {
+  std::vector<size_t> get_worst(std::vector<std::vector<double>> in,
+                             std::vector<std::vector<double>> expected) {
+    std::vector<size_t> indices(this->members.size());
+    std::iota(indices.begin(), indices.end(), 0);
+
+    std::vector<double> values(this->members.size());
+    std::transform(this->members.begin(), this->members.end(), values.begin(),
+                   [&](Network a) { return loss(a.forward(in), expected); });
+
+    std::sort(indices.begin(), indices.end(),
+              [&](size_t i, size_t j) { return values[i] < values[j]; });
+    std::vector<size_t> out;
+    for (size_t i = 0; i < N / 3; i++) {
+      out.push_back(indices[N - i - 1]);
+    }
+    cout << "best loss: " << values[indices[0]] << std::endl;
+    return out;
+  }
+
+  std::vector<Network> get_best(std::vector<std::vector<double>> in,
+                                std::vector<std::vector<double>> expected,
+                                Generation &ranking) {
     std::vector<size_t> indices(ranking.members.size());
     std::iota(indices.begin(), indices.end(), 0);
 
     std::vector<double> values(ranking.members.size());
     std::transform(ranking.members.begin(), ranking.members.end(),
-                   values.begin(), [&](Network a) {
-                     return loss<std::vector<double>, double>(
-                         (std::vector<Qbit>){a.forward(in)[0]}, expected);
-                   });
+                   values.begin(),
+                   [&](Network a) { return loss(a.forward(in), expected); });
 
     std::sort(indices.begin(), indices.end(),
               [&](size_t i, size_t j) { return values[i] < values[j]; });
@@ -378,33 +402,17 @@ public:
     return out;
   }
 
-  Network EP(std::vector<T> in, std::vector<U> expected) {
-    for (int i = 0; i < this->max_iteration; i++) {
-      std::cout << i << std::endl;
+  Network EP(std::vector<std::vector<double>> in,
+             std::vector<std::vector<double>> expected) {
+    for (unsigned int i = 0; i < this->max_iteration; i++) {
       auto ranking = Generation(*this);
       ranking.mutate(ranking);
       std::vector<Network> best = get_best(in, expected, ranking);
-      insert(best);
+      insert(best, in, expected);
     }
     return this->members[0];
   }
 };
-
-double operator-(std::vector<double> lhs, std::vector<double> &rhs) {
-  return std::transform_reduce(lhs.begin(), lhs.end(), rhs.begin(), 0.,
-                               std::plus<>(), std::minus<>());
-}
-
-std::vector<double> chances(std::vector<Qbit> qbits) {
-  std::vector<double> out;
-  std::transform(qbits.begin(), qbits.end(), std::back_inserter(out),
-                 [](Qbit &in) { return std::norm(in.get().at(0)); });
-  return out;
-}
-
-double operator-(std::vector<Qbit> &lhs, std::vector<double> &rhs) {
-  return chances(lhs) - rhs;
-}
 
 std::pair<std::vector<std::vector<double>>, std::vector<std::vector<double>>>
 get_xor();
@@ -418,7 +426,6 @@ get_xor() {
 
 int main() {
   auto xor_ = get_xor();
-  Generation result =
-      Generation<30, 2, std::vector<double>, std::vector<double>>(10);
+  Generation result = Generation(1000, 60);
   result.EP(xor_.first, xor_.second);
 }

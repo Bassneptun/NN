@@ -8,7 +8,7 @@ set(Qenv_DIR "/usr/share/doc/libqenv-dev/")
 project(NN)
 set(NN_VERSION 1.0)
 
-#add_compile_options(-Wall -Wextra -pedantic -Wconversion -Wunused -Wshadow -Wold-style-cast -Wpointer-arith -Wcast-qual -Wmissing-prototypes -Wno-missing-braces)
+add_compile_options(-Wall -Wextra -pedantic -Wunused -Wshadow -Wold-style-cast -Wpointer-arith -Wcast-qual -Wno-missing-braces)
 
 
 #option(ENABLE_ASAN "Enable AddressSanitizer" OFF)

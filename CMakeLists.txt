@@ -35,6 +35,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 #add_executable(main classical.cpp)
 add_executable(qmain quanten.cpp)
 
+
 target_compile_options(qmain PRIVATE
     -fsanitize=address
     -fno-omit-frame-pointer

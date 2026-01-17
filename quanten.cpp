@@ -19,6 +19,10 @@
 std::random_device rd;
 std::minstd_rand generator(rd());
 
+#include <fenv.h>
+
+auto _ = feenableexcept(FE_INVALID | FE_OVERFLOW | FE_DIVBYZERO);
+
 class Layer {
 public:
   virtual std::string code() = 0;
@@ -65,7 +69,7 @@ public:
   string code() override {
     std::stringstream ss;
     ss << "DAL % # \"b\"\n";
-    ss << "CMB $a" << 0 << " $a" << 1 << " \%b\n";
+    ss << "CNT $a" << 0 << " $a" << 1 << " \%b\n";
     for (int i = 2; i < this->n; i++) {
       ss << "DCB $a" << i << " \%b\n";
     }
@@ -204,7 +208,7 @@ public:
       this->layers.push_back(std::move(layers[i]));
     }
     this->generate_bytecode();
-    this->engine = std::make_optional(this->create_engine());
+    this->engine = std::make_optional(this->create_engine(this->buffer));
   }
 
   void generate_bytecode() {
@@ -215,17 +219,16 @@ public:
     }
   }
 
-  Engine create_engine() { return Engine(this->buffer, false); }
+  static Engine create_engine(string buffer) { return Engine(buffer, false); }
 
   size_t size() const { return layers.size(); }
 
-  std::vector<std::vector<Qbit>>
-  forward(const std::vector<std::vector<double>> &inputs) {
-    std::vector<std::vector<Qbit>> out;
+  std::vector<Qudit> forward(const std::vector<std::vector<double>> &inputs) {
+    std::vector<Qudit> out;
     for (auto tmp : inputs) {
       tmp.insert(tmp.end(), this->arguments.begin(), this->arguments.end());
       this->engine->exe(tmp);
-      out.push_back(this->engine->memory[0]);
+      out.push_back(this->engine->cache[0]);
       this->engine->clear();
     }
     return out;
@@ -258,15 +261,12 @@ template <typename dist> void mutate(Network &net) {
   if (choice(net.ev.mut_chance)) {
     dist mut(net.ev.params.first, net.ev.params.second);
     if (choice(net.ev.ev_target)) {
-      net.arguments[randint(
-          net.arguments.size() - 1)] += mut(generator);
+      net.arguments[randint(net.arguments.size() - 1)] += mut(generator);
     } else {
       choice(net.ev.params) += mut(generator);
       net.ev.ev_target += mut(generator);
       net.ev.mut_chance += mut(generator);
     }
-    if (!net.ev.double_mut)
-      return;
   }
 }
 
@@ -275,7 +275,7 @@ std::vector<std::function<void(Network &)>> mutation_operators = {
     [](Network &net) { mutate<std::cauchy_distribution<>>(net); }};
 
 Network create_network(
-    Network::ev_strategies ev, int N2 = 2,
+    Network::ev_strategies ev, int N2 = 1,
     std::optional<std::vector<std::unique_ptr<Layer>>> layers = std::nullopt) {
   // standard version: AngleEncoding -> RotationLayer -> Entanglement Layer ->
   // RotationLayer -> DetanglementLayer
@@ -286,31 +286,34 @@ Network create_network(
     layers_.push_back(
         std::make_unique<RotationLayer>(RotationLayer(N2, 2 * N2, true)));
     layers_.push_back(
-        std::make_unique<DetanglementLayer>(DetanglementLayer(N2)));
+        std::make_unique<RotationLayer>(RotationLayer(N2, 2 * N2 + 1, true)));
   } else {
     layers_ = std::move(*layers);
   }
-  std::normal_distribution<double> dist;
+  std::normal_distribution<double> dist(-1, 1);
   std::unique_ptr<Encoding> tmp1 =
       std::make_unique<AngleEncoding>(AngleEncoding(N2));
   auto tmp = Network(std::move(layers_), std::move(tmp1), ev, N2);
   tmp.arguments = std::vector<double>();
-  for (int i = 0; i < N2 + 1; i++) {
+  for (int i = 0; i < N2 + 2; i++) {
     tmp.arguments.push_back(dist(generator));
   }
   return tmp;
 }
 
 Network::ev_strategies create_ev() {
-  return Network::ev_strategies{std::make_pair(-1., 1.), 0, 0.4, 0.5, true};
+  return Network::ev_strategies{std::make_pair(-0.15, 0.15), 1, 0.8, 0.6, true};
 }
 
-double loss(std::vector<std::vector<Qbit>> res,
-            std::vector<std::vector<double>> expected) {
+double out(Qudit &in) {
+  return std::norm(in.get()(1)) + std::norm(in.get()(2));
+}
+
+double loss(std::vector<Qudit> res, std::vector<std::vector<double>> expected) {
   double ret = 0;
   for (unsigned int i = 0; i < res.size(); i++) {
     for (unsigned int j = 0; j < expected[0].size(); j++) {
-      ret += std::pow(std::norm(res[i][j].get()(0)) - expected[i][j], 2);
+      ret += std::pow(out(res[i]) - expected[i][j], 2);
     }
   }
   return ret / res.size();
@@ -331,12 +334,11 @@ private:
   unsigned int N;
 
 public:
-  Generation(unsigned int max_iteration, unsigned int N) : max_iteration(max_iteration), N(N) {
+  Generation(unsigned int max_iteration, unsigned int N)
+      : max_iteration(max_iteration), N(N) {
     std::normal_distribution<double> gaussian_(-1., 1.);
     for (unsigned int i = 0; i < N; i++) {
-      auto tmp = Network::ev_strategies{
-          std::make_pair(gaussian_(generator), gaussian_(generator)), 0, 0.4,
-          0.5, true};
+      auto tmp = create_ev();
       auto tmp2 = create_network(tmp);
       this->members.push_back(tmp2);
       this->members[i].ev = tmp;
@@ -357,13 +359,13 @@ public:
   void insert(std::vector<Network> &values, std::vector<std::vector<double>> in,
               std::vector<std::vector<double>> expected) {
     std::vector<size_t> indices = this->get_worst(in, expected);
-    for(size_t i = 0; i < indices.size(); i++){
+    for (size_t i = 0; i < indices.size(); i++) {
       this->members[indices[i]] = values[i];
     }
   }
 
   std::vector<size_t> get_worst(std::vector<std::vector<double>> in,
-                             std::vector<std::vector<double>> expected) {
+                                std::vector<std::vector<double>> expected) {
     std::vector<size_t> indices(this->members.size());
     std::iota(indices.begin(), indices.end(), 0);
 
@@ -377,7 +379,6 @@ public:
     for (size_t i = 0; i < N / 3; i++) {
       out.push_back(indices[N - i - 1]);
     }
-    cout << "best loss: " << values[indices[0]] << std::endl;
     return out;
   }
 
@@ -398,7 +399,7 @@ public:
     for (size_t i = 0; i < N / 3; i++) {
       out.push_back(ranking.members[indices[i]]);
     }
-    cout << "best loss: " << values[indices[0]] << std::endl;
+    std::cout << "best loss: " << values[indices[0]] << std::endl;
     return out;
   }
 
@@ -415,7 +416,13 @@ public:
 };
 
 std::pair<std::vector<std::vector<double>>, std::vector<std::vector<double>>>
-get_xor();
+get_and() {
+  std::vector<std::vector<double>> inputs = {
+      {0., 0.}, {1., 0.}, {1., 1.}, {0., 1.}};
+  std::vector<std::vector<double>> outs = {{1}, {0}, {1}, {0}};
+  return std::make_pair(inputs, outs);
+}
+
 std::pair<std::vector<std::vector<double>>, std::vector<std::vector<double>>>
 get_xor() {
   std::vector<std::vector<double>> inputs = {
@@ -424,8 +431,97 @@ get_xor() {
   return std::make_pair(inputs, outs);
 }
 
+class T {
+public:
+  string buffer = "QAL & 0 $ \"a\"\nSET $a 1 0\nHAD $a\nRZ $a ??0\nRX $a ??1\n";
+  Engine engine;
+  std::vector<std::vector<double>> members_;
+  int max_iteration;
+  int n;
+
+  T(int n, int max_iteration)
+      : engine(Network::create_engine(this->buffer)),
+        max_iteration(max_iteration), n(n) {
+    for (int i = 0; i < n; i++) {
+      std::vector<double> b = {};
+      for (int j = 0; j < 4; j++) {
+        b.push_back(s(generator));
+      }
+      this->members_.push_back(b);
+    }
+  }
+
+  double to_z(cx_vec &in) { return std::norm(in(1)); }
+
+  std::vector<double> loss(std::vector<std::vector<double>> &in,
+                           std::vector<std::vector<double>> &expected,
+                           std::vector<std::vector<double>> members) {
+    std::vector<double> losses;
+    for (int k = 0; k < members.size(); k++) {
+      double loss = 0;
+      for (int i = 0; i < in.size(); i++) {
+        std::vector<double> params;
+        for (int j = 0; j < 2; j++) {
+          params.push_back(in[i][j] * members[k][2 * j] +
+                           members[k][2 * j + 1]);
+        }
+        this->engine.exe(params);
+        auto d = this->engine.memory[0][0].get();
+        auto tmp2 = to_z(d);
+        if (!std::isfinite(tmp2) || tmp2 < 0.0 || tmp2 > 1.0) {
+          loss += 1.0;
+        } else {
+          double diff = tmp2 - expected[i][0];
+          loss += diff * diff;
+        }
+      }
+      losses.push_back(loss / 4);
+    }
+    return losses;
+  }
+
+  std::vector<std::vector<double>> mutate() {
+    std::vector<std::vector<double>> out;
+    for (int i = 0; i < this->members_.size(); i++) {
+      std::vector<double> tmp = this->members_[i];
+      for (int j = 0; j < tmp.size(); j++) {
+        tmp[j] += s(generator);
+      }
+      out.push_back(tmp);
+    }
+    return out;
+  }
+
+  void replace(std::vector<int> indices,
+               std::vector<std::vector<double>> others) {
+    for (int i = 0; i < n / 3; i++) {
+      this->members_[indices[i]] = others[indices[i]];
+    }
+  }
+
+  double EP(std::vector<std::vector<double>> in,
+            std::vector<std::vector<double>> expected) {
+    for (int epoch = 0; epoch < max_iteration; ++epoch) {
+      auto mutated = mutate();
+      auto losses_new = loss(in, expected, mutated);
+      auto losses_old = loss(in, expected, this->members_);
+
+      for (int i = 0; i < n; i++) {
+        if (losses_new[i] < losses_old[i]) {
+          this->members_[i] = mutated[i];
+        }
+      }
+      std::cout << "best loss: "
+                << *std::min_element(losses_old.begin(), losses_old.end())
+                << std::endl;
+    }
+    auto final_losses = loss(in, expected, this->members_);
+    return *std::min_element(final_losses.begin(), final_losses.end());
+  }
+};
+
 int main() {
   auto xor_ = get_xor();
-  Generation result = Generation(1000, 60);
-  result.EP(xor_.first, xor_.second);
+  T net(60, 100);
+  std::cout << net.EP(xor_.first, xor_.second) << std::endl;
 }

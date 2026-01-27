@@ -10,6 +10,7 @@
 #include <optional>
 #include <qenv/include/Confirm.hh>
 #include <qenv/include/Engine.hh>
+#include <qenv/include/QuditClass.hh>
 #include <random>
 #include <sstream>
 #include <string>
@@ -399,7 +400,7 @@ public:
     for (size_t i = 0; i < N / 3; i++) {
       out.push_back(ranking.members[indices[i]]);
     }
-    std::cout << "best loss: " << values[indices[0]] << std::endl;
+    //std::cout << "best loss: " << values[indices[0]] << std::endl;
     return out;
   }
 
@@ -492,6 +493,19 @@ public:
     return out;
   }
 
+  std::vector<std::vector<double>>
+  mutate(std::vector<std::vector<double>> mems) {
+    std::vector<std::vector<double>> out;
+    for (int i = 0; i < mems.size(); i++) {
+      std::vector<double> tmp = mems[i];
+      for (int j = 0; j < tmp.size(); j++) {
+        tmp[j] += s(generator);
+      }
+      out.push_back(tmp);
+    }
+    return out;
+  }
+
   void replace(std::vector<int> indices,
                std::vector<std::vector<double>> others) {
     for (int i = 0; i < n / 3; i++) {
@@ -499,8 +513,9 @@ public:
     }
   }
 
-  double EP(std::vector<std::vector<double>> in,
-            std::vector<std::vector<double>> expected) {
+  std::vector<double> EP(std::vector<std::vector<double>> in,
+                         std::vector<std::vector<double>> expected) {
+    std::vector<double> out;
     for (int epoch = 0; epoch < max_iteration; ++epoch) {
       auto mutated = mutate();
       auto losses_new = loss(in, expected, mutated);
@@ -511,17 +526,101 @@ public:
           this->members_[i] = mutated[i];
         }
       }
-      std::cout << "best loss: "
-                << *std::min_element(losses_old.begin(), losses_old.end())
-                << std::endl;
+      auto m_l = *std::min_element(losses_old.begin(), losses_old.end());
+      //std::cout << "best loss: " << m_l << std::endl;
+      out.push_back(m_l);
+    }
+    return out;
+  }
+
+  std::pair<int, int> smallest(const std::vector<double> &in) {
+    double l1 = 1, l2 = 1;
+    int i1 = 0, i2 = 0;
+    for (int i = 0; i < in.size(); i++) {
+      if (in[i] < l1)
+        l1 = in[i], i1 = i;
+      else if (in[i] < l2)
+        l2 = in[i], i2 = i;
+    }
+    return std::make_pair(i1, i2);
+  }
+
+  std::vector<double> crossover(std::pair<double, double> sm) {
+    auto p1 = this->members_[sm.first], p2 = this->members_[sm.second];
+    int intersect = randint(p1.size());
+    std::vector<double> out;
+    for (int i = 0; i < intersect; i++) {
+      out.push_back(p1[i]);
+    }
+    for (int i = intersect; i < p1.size(); i++) {
+      out.push_back(p2[i]);
+    }
+    return out;
+  }
+
+  std::vector<std::vector<double>> crossover(std::vector<double> losses) {
+    auto parents = this->smallest(losses);
+    std::vector<std::vector<double>> out;
+    for (int i = 0; i < losses.size(); i++) {
+      out.push_back(this->crossover(parents));
+    }
+    return out;
+  }
+
+  double GA(std::vector<std::vector<double>> in,
+            std::vector<std::vector<double>> expected) {
+    for (int epoch = 0; epoch < max_iteration; ++epoch) {
+      auto losses_old = loss(in, expected, this->members_);
+      auto next = this->crossover(losses_old);
+      auto mutated = mutate(next);
+      auto losses_new = loss(in, expected, mutated);
+
+      for (int i = 0; i < n; i++) {
+        if (losses_new[i] < losses_old[i]) {
+          this->members_[i] = mutated[i];
+        }
+      }
+      //std::cout << "best loss: "
+      //          << *std::min_element(losses_old.begin(), losses_old.end())
+      //          << std::endl;
     }
     auto final_losses = loss(in, expected, this->members_);
     return *std::min_element(final_losses.begin(), final_losses.end());
   }
 };
 
+std::vector<double>& operator+(std::vector<double>& lhs, std::vector<double>&& rhs){
+  for(int i = 0; i < lhs.size(); i++){
+    lhs[i] += rhs[i];
+  }
+  return lhs;
+}
+
+std::vector<double>& operator/(std::vector<double>& a, int b){
+  for(int i = 0; i < a.size(); i++){
+    a[i] /= b;
+  }
+  return a;
+}
+
+std::vector<double> median_run(std::pair<std::vector<std::vector<double>>,
+                                         std::vector<std::vector<double>>>
+                                   in,
+                               int runs, int psize, int max_it) {
+  std::vector<double> out;
+  T net(psize, max_it);
+  out = net.EP(in.first, in.second);
+  for (int i = 0; i < runs; i++) {
+    out = out + net.EP(in.first, in.second);
+    cout << "run: " << i << std::endl;
+  }
+  return out / runs;
+}
+
 int main() {
   auto xor_ = get_xor();
-  T net(60, 100);
-  std::cout << net.EP(xor_.first, xor_.second) << std::endl;
+  auto out = median_run(xor_, 100, 60, 100);
+  for(auto& a: out){
+    std::cout << a << std::endl;
+  }
 }

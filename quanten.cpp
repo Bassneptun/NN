@@ -611,6 +611,7 @@ std::vector<double> median_run(std::pair<std::vector<std::vector<double>>,
   T net(psize, max_it);
   out = net.EP(in.first, in.second);
   for (int i = 0; i < runs; i++) {
+    net = T(psize, max_it);
     out = out + net.EP(in.first, in.second);
     cout << "run: " << i << std::endl;
   }

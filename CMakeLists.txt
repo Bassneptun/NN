@@ -9,6 +9,7 @@ project(NN)
 set(NN_VERSION 1.0)
 
 add_compile_options(-Wall -Wextra -pedantic -Wunused -Wshadow -Wold-style-cast -Wpointer-arith -Wcast-qual -Wno-missing-braces)
+add_compile_options(-Ofast)
 
 
 #option(ENABLE_ASAN "Enable AddressSanitizer" OFF)
@@ -37,11 +38,8 @@ add_executable(qmain quanten.cpp)
 
 
 target_compile_options(qmain PRIVATE
-    -fsanitize=address
-    -fno-omit-frame-pointer
-    --debug
-    -O0
+    -Ofast
 )
 
 #target_link_libraries(main PRIVATE armadillo)
-target_link_libraries(qmain PRIVATE -fsanitize=address qenv armadillo )
+target_link_libraries(qmain PRIVATE qenv armadillo )

@@ -3,6 +3,7 @@
 #include <cassert>
 #include <complex>
 #include <cstddef>
+#include <exception>
 #include <functional>
 #include <iostream>
 #include <memory>
@@ -400,7 +401,7 @@ public:
     for (size_t i = 0; i < N / 3; i++) {
       out.push_back(ranking.members[indices[i]]);
     }
-    //std::cout << "best loss: " << values[indices[0]] << std::endl;
+    // std::cout << "best loss: " << values[indices[0]] << std::endl;
     return out;
   }
 
@@ -439,6 +440,7 @@ public:
   std::vector<std::vector<double>> members_;
   int max_iteration;
   int n;
+  double eta, alpha;
 
   T(int n, int max_iteration)
       : engine(Network::create_engine(this->buffer)),
@@ -527,7 +529,7 @@ public:
         }
       }
       auto m_l = *std::min_element(losses_old.begin(), losses_old.end());
-      //std::cout << "best loss: " << m_l << std::endl;
+      // std::cout << "best loss: " << m_l << std::endl;
       out.push_back(m_l);
     }
     return out;
@@ -545,33 +547,53 @@ public:
     return std::make_pair(i1, i2);
   }
 
-  std::vector<double> crossover(std::pair<double, double> sm) {
+  std::vector<std::vector<double>> blx_alpha(std::pair<double, double> sm) {
     auto p1 = this->members_[sm.first], p2 = this->members_[sm.second];
-    int intersect = randint(p1.size());
-    std::vector<double> out;
-    for (int i = 0; i < intersect; i++) {
-      out.push_back(p1[i]);
-    }
-    for (int i = intersect; i < p1.size(); i++) {
-      out.push_back(p2[i]);
+    std::vector<std::vector<double>> out;
+    for (int j = 0; j < n; j++) {
+      std::vector<double> current;
+      for (int i = 0; i < p1.size(); i++) {
+        std::uniform_real_distribution<> blx(0, 1);
+        if (p1[i] < p2[i]) {
+          double d = p2[i] - p1[i];
+          blx = std::uniform_real_distribution<>(p1[i] - alpha * d,
+                                                 p2[i] + alpha * d);
+        } else {
+
+          double d = p1[i] - p2[i];
+          blx = std::uniform_real_distribution<>(p2[i] - alpha * d,
+                                                 p1[i] + alpha * d);
+        }
+        current.push_back(blx(generator));
+      }
     }
     return out;
   }
 
-  std::vector<std::vector<double>> crossover(std::vector<double> losses) {
+  std::vector<std::vector<double>> crossover_blx(std::vector<double> losses) {
     auto parents = this->smallest(losses);
-    std::vector<std::vector<double>> out;
-    for (int i = 0; i < losses.size(); i++) {
-      out.push_back(this->crossover(parents));
-    }
+    std::vector<std::vector<double>> out = blx_alpha(parents);
     return out;
+  }
+
+  std::vector<std::vector<double>> sbx(std::pair<double, double> sm) {
+    auto p1 = this->members_[sm.first], p2 = this->members_[sm.second];
+    std::vector<std::vector<double>> out;
+    std::vector<double> c1, c2;
+    for (int i = 0; i < p1.size(); i++) {
+      double u = randu();
+      double beta = (u <= 0.5) ? std::pow(2 * u, 1 / (eta + 1))
+                               : std::pow(1 / 2 * (1 - u), 1 / (eta + 1));
+      c1.push_back((1 / 2) * ((1 + beta) * p1[i] + (1 - beta) * p2[i]));
+      c2.push_back((1 / 2) * ((1 - beta) * p1[i] + (1 + beta) * p2[i]));
+    }
   }
 
   double GA(std::vector<std::vector<double>> in,
             std::vector<std::vector<double>> expected) {
     for (int epoch = 0; epoch < max_iteration; ++epoch) {
       auto losses_old = loss(in, expected, this->members_);
-      auto next = this->crossover(losses_old);
+      auto next = this->crossover_blx(losses_old);
       auto mutated = mutate(next);
       auto losses_new = loss(in, expected, mutated);
 
@@ -580,24 +602,25 @@ public:
           this->members_[i] = mutated[i];
         }
       }
-      //std::cout << "best loss: "
-      //          << *std::min_element(losses_old.begin(), losses_old.end())
-      //          << std::endl;
+      // std::cout << "best loss: "
+      //           << *std::min_element(losses_old.begin(), losses_old.end())
+      //           << std::endl;
     }
     auto final_losses = loss(in, expected, this->members_);
     return *std::min_element(final_losses.begin(), final_losses.end());
   }
 };
 
-std::vector<double>& operator+(std::vector<double>& lhs, std::vector<double>&& rhs){
-  for(int i = 0; i < lhs.size(); i++){
+std::vector<double> &operator+(std::vector<double> &lhs,
+                               std::vector<double> &&rhs) {
+  for (int i = 0; i < lhs.size(); i++) {
     lhs[i] += rhs[i];
   }
   return lhs;
 }
 
-std::vector<double>& operator/(std::vector<double>& a, int b){
-  for(int i = 0; i < a.size(); i++){
+std::vector<double> &operator/(std::vector<double> &a, int b) {
+  for (int i = 0; i < a.size(); i++) {
     a[i] /= b;
   }
   return a;
@@ -621,7 +644,7 @@ std::vector<double> median_run(std::pair<std::vector<std::vector<double>>,
 int main() {
   auto xor_ = get_xor();
   auto out = median_run(xor_, 100, 60, 100);
-  for(auto& a: out){
+  for (auto &a : out) {
     std::cout << a << std::endl;
   }
 }

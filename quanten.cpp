@@ -1,9 +1,10 @@
 #include <algorithm>
 #include <armadillo>
 #include <cassert>
+#include <chrono>
+#include <cmath>
 #include <complex>
 #include <cstddef>
-#include <exception>
 #include <functional>
 #include <iostream>
 #include <memory>
@@ -45,6 +46,14 @@ std::vector<double> &operator-(std::vector<double> &lhs,
 std::vector<double> &operator/(std::vector<double> &a, int b) {
   for (int i = 0; i < a.size(); i++) {
     a[i] /= b;
+  }
+  return a;
+}
+
+
+std::vector<double> &operator*(std::vector<double> &a, int b) {
+  for (int i = 0; i < a.size(); i++) {
+    a[i] *= b;
   }
   return a;
 }
@@ -468,17 +477,16 @@ public:
   std::vector<double> spread;
   double learning_rate;
 
-  T(int n, int max_iteration)
+  T(int n, int max_iteration, int m = 2)
       : engine(Network::create_engine(this->buffer)),
-        max_iteration(max_iteration), n(n) {
-    this->m = 4;
-    this->learning_rate = 1;
+        max_iteration(max_iteration), n(n), m(m) {
+    this->learning_rate = 10;
     for (int i = 0; i < n; i++) {
       std::vector<double> b = {};
       spread.push_back(s(generator));
       eta.push_back(s(generator));
       alpha.push_back(s(generator));
-      for (int j = 0; j < 4; j++) {
+      for (int j = 0; j < this->m * 2; j++) {
         b.push_back(s(generator));
       }
       this->members_.push_back(b);
@@ -495,7 +503,7 @@ public:
       double loss = 0;
       for (int i = 0; i < in.size(); i++) {
         std::vector<double> params;
-        for (int j = 0; j < 2; j++) {
+        for (int j = 0; j < this->m; j++) {
           params.push_back(in[i][j] * members[k][2 * j] +
                            members[k][2 * j + 1]);
         }
@@ -505,7 +513,7 @@ public:
         double diff = tmp2 - expected[i][0];
         loss += diff * diff;
       }
-      losses.push_back(loss / 4);
+      losses.push_back(loss / in.size());
     }
     return losses;
   }
@@ -516,7 +524,7 @@ public:
     double loss = 0;
     for (int i = 0; i < in.size(); i++) {
       std::vector<double> params;
-      for (int j = 0; j < 2; j++) {
+      for (int j = 0; j < this->m; j++) {
         params.push_back(in[i][j] * members[2 * j] + members[2 * j + 1]);
       }
       this->engine.exe(params);
@@ -548,7 +556,7 @@ public:
   std::vector<std::vector<double>> mutate() {
     std::vector<std::vector<double>> out;
     for (int i = 0; i < this->members_.size(); i++) {
-      std::normal_distribution<double> a(-spread[i], spread[i]);
+      std::cauchy_distribution<double> a(-spread[i], spread[i]);
       std::vector<double> tmp = this->members_[i];
       for (int j = 0; j < tmp.size(); j++) {
         tmp[j] += a(generator);
@@ -569,7 +577,7 @@ public:
   mutate(std::vector<std::vector<double>> mems) {
     std::vector<std::vector<double>> out;
     for (int i = 0; i < mems.size(); i++) {
-      std::normal_distribution<double> a(-spread[i], spread[i]);
+      std::cauchy_distribution<double> a(-spread[i], spread[i]);
       std::vector<double> tmp = mems[i];
       for (int j = 0; j < tmp.size(); j++) {
         tmp[j] += a(generator);
@@ -593,10 +601,12 @@ public:
     }
   }
 
-  std::vector<double> EP(std::vector<std::vector<double>> in,
-                         std::vector<std::vector<double>> expected) {
+  int EP(std::vector<std::vector<double>> in,
+         std::vector<std::vector<double>> expected, double stop = 0.00001) {
     std::vector<double> out;
-    for (int epoch = 0; epoch < max_iteration; ++epoch) {
+    double a = 1000;
+    int used = 0;
+    for (int epoch = 0; (epoch < max_iteration) && a > stop; ++epoch, used++) {
       auto mutated = mutate();
       auto losses_new = loss(in, expected, mutated);
       auto losses_old = loss(in, expected, this->members_);
@@ -607,10 +617,12 @@ public:
         }
       }
       auto m_l = *std::min_element(losses_old.begin(), losses_old.end());
+      a = m_l;
       // std::cout << "best loss: " << m_l << std::endl;
       out.push_back(m_l);
     }
-    return out;
+    // return out;
+    return used;
   }
 
   std::pair<int, int> smallest(const std::vector<double> &in) {
@@ -658,7 +670,7 @@ public:
   std::vector<std::vector<double>> sbx(std::pair<double, double> sm) {
     auto p1 = this->members_[sm.first], p2 = this->members_[sm.second];
     std::vector<std::vector<double>> out;
-    for(int i = 0; i < n/2; i++){
+    for (int i = 0; i < n / 2; i++) {
       std::vector<double> c1, c2;
       for (int i = 0; i < p1.size(); i++) {
         double u = randu();
@@ -680,50 +692,59 @@ public:
     return out;
   }
 
-  double f(double theta1, double theta2) {
-    std::vector<double> params = {theta1, theta2};
+  double f(std::vector<double> thetas) {
+    std::vector<double> params = thetas;
     this->engine.exe(params);
     auto tmp = this->engine.memory[0][0].get();
     return to_z(tmp);
   }
 
-  std::vector<double> PS(std::vector<std::vector<double>> in,
-                         std::vector<std::vector<double>> expected) {
+  int PS(std::vector<std::vector<double>> in,
+         std::vector<std::vector<double>> expected, double stop = 0.00001) {
     // Parameter-shift, only modifies first vector
     std::vector<double> losses;
-    for (int epoch = 0; epoch < max_iteration; epoch++) {
+    double a = 100;
+    int used = 0;
+    for (int epoch = 0; (epoch < max_iteration) && a > stop; epoch++, used++) {
       std::vector<double> lossD = this->lossD(in, expected, this->members_[0]);
-      std::vector<double> gradients(this->m, 0.);
+      std::vector<double> gradients(this->m * 2, 0.);
       for (int i = 0; i < in.size(); i++) {
-        double c1 = members_[0][0] * in[i][0] + members_[0][1],
-               c2 = members_[0][2] * in[i][1] + members_[0][3];
-        std::vector<double> partials = {
-            (in[i][0] / 2) * (f(c1 + std::numbers::pi / 2, c2) -
-                              f(c1 - std::numbers::pi / 2, c2)),
-            (1. / 2) * (f(c1 + std::numbers::pi / 2, c2) -
-                        f(c1 - std::numbers::pi / 2, c2)),
-            (in[i][1] / 2) * (f(c1, c2 + std::numbers::pi / 2) -
-                              f(c1, c2 - std::numbers::pi / 2)),
-            (1. / 2) * (f(c1, c2 + std::numbers::pi / 2) -
-                        f(c1, c2 - std::numbers::pi / 2))
-        };
+        std::vector<double> cs;
         for (int j = 0; j < this->m; j++) {
+          cs.push_back(this->members_[0][2 * j] * in[i][(j + 2) % 2] +
+                       this->members_[0][2 * j + 1]);
+        }
+        std::vector<double> partials;
+        for (int j = 0; j < this->m; j++) {
+          auto thetas1 = cs, thetas2 = cs;
+          thetas1[j] += std::numbers::pi / 2;
+          thetas2[j] -= std::numbers::pi / 2;
+          partials.push_back((in[i][(j + 2) % 2] / 2) *
+                             (f(thetas1) - f(thetas2)));
+          partials.push_back((1. / 2) * (f(thetas1) - f(thetas2)));
+        }
+        for (int j = 0; j < this->m * 2; j++) {
           gradients[j] += partials[j] * lossD[i];
         }
       }
       gradients = gradients / in.size();
-      this->members_[0] = this->members_[0] - gradients / (1/learning_rate);
-      losses.push_back(loss(in, expected, members_[0]));
+      this->members_[0] = this->members_[0] - gradients * learning_rate;
+      auto tmp = loss(in, expected, members_[0]);
+      losses.push_back(tmp);
+      a = tmp;
     }
-    return losses;
+    // return losses;
+    return used;
   }
 
-  std::vector<double> GA(std::vector<std::vector<double>> in,
-                         std::vector<std::vector<double>> expected) {
+  int GA(std::vector<std::vector<double>> in,
+         std::vector<std::vector<double>> expected, double stop = 0.00001) {
     std::vector<double> out;
-    for (int epoch = 0; epoch < max_iteration; ++epoch) {
+    double a = MAXFLOAT;
+    int used = 0;
+    for (int epoch = 0; (epoch < max_iteration) && a > stop; ++epoch, used++) {
       auto losses_old = loss(in, expected, this->members_);
-      auto next = this->crossover_sbx(losses_old);
+      auto next = this->crossover_blx(losses_old);
       auto mutated = mutate(next);
       auto losses_new = loss(in, expected, mutated);
 
@@ -733,14 +754,16 @@ public:
         }
       }
 
-      auto a__ = *std::min_element(losses_old.begin(), losses_old.end());
+      a = *std::min_element(losses_old.begin(), losses_old.end());
 
-      out.push_back(a__);
+      out.push_back(a);
       // std::cout << "best loss: " << a__ << std::endl;
     }
-    return out;
+    // return out;
+    return used;
   }
 };
+/*
 std::vector<double> median_run_1(std::pair<std::vector<std::vector<double>>,
                                            std::vector<std::vector<double>>>
                                      in,
@@ -786,11 +809,75 @@ std::vector<double> median_run_3(std::pair<std::vector<std::vector<double>>,
   return out / runs;
 }
 
+*/
+
+string scale_net(int thetas) {
+  string setup = "QAL & 0 $ \"a\"\nSET $a 1 0\nHAD $a\n";
+  string repeat1 = "RZ $a ??";
+  string repeat2 = "RX $a ??";
+  for (int i = 0; i < thetas; i += 2) {
+    setup += repeat1 + std::to_string(i) + "\n";
+    setup += repeat2 + std::to_string(i+1) + "\n";
+  }
+  return setup;
+}
+
+using clock_ = std::chrono::high_resolution_clock;
+
+void scale_test(std::pair<std::vector<std::vector<double>>,
+                          std::vector<std::vector<double>>>
+                    in,
+                int runs, int psize, int max_it, int max_scale = 20,
+                double stop = 0.001) {
+  /*
+  std::cout << "GA:" << std::endl;
+  for (int ns = 2; ns <= max_scale; ns += 2) {
+    T net(psize, max_it, ns);
+    net.buffer = scale_net(ns);
+    auto start = clock_::now();
+    for (int i = 0; i < runs; i++) {
+      auto used = net.GA(in.first, in.second, stop);
+      std::cout << used << std::endl;
+      net = T(psize, max_it, ns);
+    }
+    auto end = clock_::now();
+    std::chrono::duration<double> elapsed = end - start;
+    std::cout << ns << " " << elapsed.count() << std::endl;
+  }
+  std::cerr << "DONE1";
+  std::cout << "EP:" << std::endl;
+  for (int ns = 2; ns <= max_scale; ns += 2) {
+    T net(psize, max_it, ns);
+    net.buffer = scale_net(ns);
+    auto start = clock_::now();
+    for (int i = 0; i < runs; i++) {
+      auto used = net.EP(in.first, in.second, stop);
+      std::cout << used << std::endl;
+      net = T(psize, max_it, ns);
+    }
+    auto end = clock_::now();
+    std::chrono::duration<double> elapsed = end - start;
+    std::cout << ns << " " << elapsed.count() << std::endl;
+  }
+  std::cerr << "DONE2";
+  */
+  std::cout << "PS:" << std::endl;
+  for (int ns = 2; ns <= max_scale; ns += 2) {
+    T net(psize, max_it, ns);
+    net.buffer = scale_net(ns);
+    auto start = clock_::now();
+    for (int i = 0; i < runs; i++) {
+      auto used = net.PS(in.first, in.second, stop);
+      std::cout << used << std::endl;
+      net = T(psize, max_it, ns);
+    }
+    auto end = clock_::now();
+    std::chrono::duration<double> elapsed = end - start;
+    std::cout << ns << " " << elapsed.count() << std::endl;
+  }
+}
+
 int main() {
   auto xor_ = get_xor();
-  std::cout << "GA: Normal, SBX\n\n" << std::endl;
-  auto out2 = median_run_2(xor_, 100, 60, 100);
-  for (auto &a : out2) {
-    std::cout << a << std::endl;
-  }
+  scale_test(xor_, 20, 50, 100, 200);
 }

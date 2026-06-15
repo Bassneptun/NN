@@ -525,7 +525,7 @@ public:
     for (int i = 0; i < in.size(); i++) {
       std::vector<double> params;
       for (int j = 0; j < this->m; j++) {
-        params.push_back(in[i][j] * members[2 * j] + members[2 * j + 1]);
+        params.push_back(in[i][j%2] * members[2 * j] + members[2 * j + 1]);
       }
       this->engine.exe(params);
       auto d = this->engine.memory[0][0].get();
@@ -699,7 +699,7 @@ public:
     return to_z(tmp);
   }
 
-  int PS(std::vector<std::vector<double>> in,
+  std::vector<double> PS(std::vector<std::vector<double>> in,
          std::vector<std::vector<double>> expected, double stop = 0.00001) {
     // Parameter-shift, only modifies first vector
     std::vector<double> losses;
@@ -733,8 +733,7 @@ public:
       losses.push_back(tmp);
       a = tmp;
     }
-    // return losses;
-    return used;
+    return losses;
   }
 
   int GA(std::vector<std::vector<double>> in,
@@ -815,7 +814,7 @@ string scale_net(int thetas) {
   string setup = "QAL & 0 $ \"a\"\nSET $a 1 0\nHAD $a\n";
   string repeat1 = "RZ $a ??";
   string repeat2 = "RX $a ??";
-  for (int i = 0; i < thetas; i += 2) {
+  for (int i = 0; i < thetas; i += 3) {
     setup += repeat1 + std::to_string(i) + "\n";
     setup += repeat2 + std::to_string(i+1) + "\n";
   }
@@ -860,7 +859,6 @@ void scale_test(std::pair<std::vector<std::vector<double>>,
     std::cout << ns << " " << elapsed.count() << std::endl;
   }
   std::cerr << "DONE2";
-  */
   std::cout << "PS:" << std::endl;
   for (int ns = 2; ns <= max_scale; ns += 2) {
     T net(psize, max_it, ns);
@@ -875,9 +873,30 @@ void scale_test(std::pair<std::vector<std::vector<double>>,
     std::chrono::duration<double> elapsed = end - start;
     std::cout << ns << " " << elapsed.count() << std::endl;
   }
+  */
 }
+
+
 
 int main() {
   auto xor_ = get_xor();
-  scale_test(xor_, 20, 50, 100, 200);
+  //scale_test(xor_, 20, 50, 100, 200);
+  int it = 250;
+  std::vector<double> m2(it, 0.),m3(it, 0.);
+  int runs = 2;
+  for(int _ = 0; _ < runs; _++){
+    T net(50, it, 3);
+    net.buffer = "QAL & 0 $ \"a\"\nSET $a 1 0\nHAD $a\nRZ $a ??0\nRX $a ??1\nRY $a ??2\n";
+    T net2(50, it, 2);
+    m3 = m3 + net.PS(xor_.first, xor_.second, 1e-30);
+    m2 = m2 + net2.PS(xor_.first, xor_.second, 1e-30);
+  }
+
+  m2 = m2 / runs;
+  m3 = m3 / runs;
+
+  std::cout << "X Y1 Y2" << "\n";
+  for(int i = 0; i < it; i++){
+    std::cout << i << " " << m2[i] << " " << m3[i] << std::endl;
+  }
 }

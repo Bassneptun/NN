@@ -9,8 +9,9 @@ project(NN)
 set(NN_VERSION 1.0)
 
 add_compile_options(-Wall -Wextra -pedantic -Wunused -Wshadow -Wold-style-cast -Wpointer-arith -Wcast-qual -Wno-missing-braces)
-add_compile_options(-Ofast)
+#add_compile_options(--debug)
 
+add_compile_options(-Ofast)
 
 #option(ENABLE_ASAN "Enable AddressSanitizer" OFF)
 #option(ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
@@ -34,12 +35,10 @@ find_package(Qenv REQUIRED)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 #add_executable(main classical.cpp)
-add_executable(qmain quanten.cpp)
+#add_executable(qmain quanten.cpp)
+add_executable(qvision qv.cpp)
 
-
-target_compile_options(qmain PRIVATE
-    -Ofast
-)
 
 #target_link_libraries(main PRIVATE armadillo)
-target_link_libraries(qmain PRIVATE qenv armadillo )
+#target_link_libraries(qmain PRIVATE qenv armadillo )
+target_link_libraries(qvision PRIVATE qenv armadillo )

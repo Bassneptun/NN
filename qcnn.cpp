@@ -1,29 +1,38 @@
 #include <armadillo>
 #include <fstream>
-#include <optional>
+#include <iostream>
+#include <ostream>
 #include <qenv/include/Engine.hh>
 #include <string>
 #include <utility>
 #include <vector>
 
-std::pair<arma::vec, int> parse_line(std::string line) {
+std::pair<arma::vec, int> parse_line_triple(std::string lines) {
   std::string current;
   arma::vec out;
-  int class_;
-  for (unsigned int i = 0; i < line.size(); i++) {
-    switch (line[i]) {
+  int class_ = -1;
+  int state = 0;
+  for (unsigned int i = 0; i < lines.size() && state < 2; i++) {
+    switch (lines[i]) {
     case ' ':
-      current += line[i];
-      break;
-    case ',':
-      out += std::stod(current);
+      if (current != "")
+        out += std::stod(current);
       current.clear();
       break;
-    case '.':
-      class_ = std::stoi(current);
+    case '[':
+      if (current != "")
+        class_ += std::stoi(current);
       current.clear();
+      break;
+    case ']':
+      out += std::stoi(current);
+      current.clear();
+      break;
+    case '\n':
+      state++;
       break;
     default:
+      current += lines[i];
       break;
     }
   }
@@ -37,9 +46,15 @@ load_data(std::string path) {
   std::vector<arma::vec> components;
   std::vector<int> classes;
   while (file.good()) {
-    std::string line;
+    std::cout << "1" << std::endl;
+    std::string line, ltemp;
     std::getline(file, line);
-    auto parsed = parse_line(line);
+    line += "\n";
+    std::getline(file, ltemp);
+    line = line + ltemp;
+    std::getline(file, ltemp);
+    line = line + ltemp;
+    auto parsed = parse_line_triple(line);
     classes.push_back(parsed.second);
     components.push_back(parsed.first);
   }
@@ -53,6 +68,8 @@ private:
   std::pair<int, int> dims; // in(number of principal components), out(number of
                             // classes) dimensions. in < number of layers, out =
                             // log2(states of system) must be given
+  int m;
+
 public:
   double to_z(cx_vec &in) { return std::norm(in(1)); }
 
@@ -114,3 +131,10 @@ public:
     return loss;
   }
 };
+
+int main(int argc, char *argv[]) {
+  auto data = load_data("pca_data10");
+  for (auto w : data.second)
+    std::cout << w << std::endl;
+  return 0;
+}

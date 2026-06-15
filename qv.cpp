@@ -95,8 +95,12 @@ public:
   cx_mat U(int i, double y) {
     // std::cout << "y: " << y << std::endl;
     if (i == 0) {
+      /*
       cx_mat I = arma::kron(paulis.slice(3), paulis.slice(3));
       return arma::expmat(-1i * std::fmod(y, 360) * .5 * I);
+      */
+
+      return {{1, 0, 0 , 0}, {0, 1, 0, 0}, {0, 0, 0, 1}, {0, 1, 0, 0}};
 
     } else if (i < 4) {
       // qb1
